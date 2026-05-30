@@ -1,0 +1,169 @@
+<!doctype html>
+<html lang="ja">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Wakayama Moodle Workspace</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <div class="workspace-shell">
+      <main class="workspace-main">
+        <section class="browser-workspace">
+          <div id="browser-tab-strip" class="browser-tab-strip"></div>
+          <div class="browser-toolbar">
+            <button type="button" class="icon-button" data-action="back" title="戻る">←</button>
+            <button type="button" class="icon-button" data-action="forward" title="進む">→</button>
+            <button type="button" class="icon-button" data-action="reload" title="再読み込み">⟳</button>
+            <div class="address-shell">
+              <span class="address-icon">⌕</span>
+              <input id="address-input" class="address-input" type="text" autocomplete="off" />
+              <button type="button" class="address-button" data-action="favorite" title="お気に入り">☆</button>
+              <button type="button" class="address-button" data-action="menu" title="メニュー">⋮</button>
+            </div>
+          </div>
+          <div id="browser-content" class="browser-content"></div>
+        </section>
+
+        <aside id="side-panel" class="side-panel">
+          <div class="side-panel-inner">
+            <div class="side-panel-tabs">
+              <button id="side-tab-explorer" type="button" class="side-tab-button active">エクスプローラー</button>
+              <button id="side-tab-timeline" type="button" class="side-tab-button">タイムライン</button>
+              <button id="hide-side-panel-button" type="button" class="panel-close-button" title="右パネルを隠す">×</button>
+            </div>
+
+            <section id="explorer-panel" class="panel-view active">
+              <div class="explorer-header">
+                <div class="course-summary">
+                  <div class="course-summary-label">現在の科目</div>
+                  <div id="active-course-label" class="course-summary-value">未選択</div>
+                </div>
+                <div class="explorer-header-actions">
+                  <button id="open-course-page-button" type="button" class="secondary-button">LMSページを開く</button>
+                </div>
+              </div>
+
+              <div class="path-row">
+                <span class="path-icon">📁</span>
+                <div id="current-dir-label" class="path-text"></div>
+              </div>
+
+              <div class="explorer-toolbar">
+                <button id="new-tab-button" type="button" class="secondary-button">＋ 新規</button>
+                <button id="batch-download-button" type="button" class="icon-button" title="一括ダウンロード">⇩</button>
+                <button id="refresh-directory-button" type="button" class="icon-button" title="更新">⟳</button>
+                <button id="choose-root-button" type="button" class="secondary-button">保存先</button>
+                <button id="open-settings-button" type="button" class="icon-button" title="設定">⚙</button>
+              </div>
+
+              <div class="file-table">
+                <div class="file-table-header">
+                  <span>名前</span>
+                  <span>更新日時</span>
+                  <span>サイズ</span>
+                </div>
+                <div id="file-list" class="file-list"></div>
+              </div>
+            </section>
+
+            <section id="timeline-panel" class="panel-view">
+              <div class="timeline-header">
+                <div class="timeline-title">タイムライン</div>
+                <button id="timeline-refresh-button" type="button" class="icon-button" title="更新">⟳</button>
+              </div>
+              <div class="timeline-filters">
+                <button type="button" class="filter-chip active" data-filter="all">すべて</button>
+                <button type="button" class="filter-chip" data-filter="today">今日</button>
+                <button type="button" class="filter-chip" data-filter="3days">3日以内</button>
+                <button type="button" class="filter-chip" data-filter="week">今週</button>
+                <button type="button" class="filter-chip" data-filter="expired">期限切れ</button>
+              </div>
+              <div id="timeline-list" class="timeline-list"></div>
+            </section>
+          </div>
+        </aside>
+      </main>
+
+      <div class="panel-dock">
+        <button id="dock-toggle-button" type="button" class="dock-toggle-button" title="右パネルの表示切替">＜</button>
+      </div>
+
+      <dialog id="settings-dialog" class="settings-dialog">
+        <form method="dialog" class="settings-form">
+          <div class="dialog-header">
+            <h2>設定</h2>
+            <button value="cancel" class="ghost-button">閉じる</button>
+          </div>
+
+          <section class="settings-section">
+            <label class="setting-label">保存ルート</label>
+            <div id="root-dir-label" class="path-chip"></div>
+            <button id="dialog-choose-root-button" type="button" class="secondary-button">変更</button>
+          </section>
+
+          <section class="settings-section">
+            <div class="dialog-header compact">
+              <h2>コース紐づけ</h2>
+            </div>
+            <div id="mapping-list" class="mapping-list"></div>
+          </section>
+        </form>
+      </dialog>
+
+      <dialog id="mapping-dialog" class="mapping-dialog">
+        <form method="dialog" class="mapping-form">
+          <div class="dialog-header">
+            <h2>コースフォルダの決定</h2>
+          </div>
+          <p id="mapping-course-label" class="dialog-lead"></p>
+          <div id="mapping-suggestions" class="suggestions"></div>
+          <menu class="dialog-actions">
+            <button id="mapping-create-folder" type="button" class="secondary-button">新しくフォルダを作成</button>
+            <button id="mapping-choose-folder" type="button" class="secondary-button">既存フォルダを選ぶ</button>
+            <button value="cancel" class="ghost-button">閉じる</button>
+          </menu>
+        </form>
+      </dialog>
+
+      <dialog id="download-dialog" class="download-dialog">
+        <form method="dialog" class="download-form">
+          <div class="dialog-header">
+            <h2>ダウンロード</h2>
+            <button value="cancel" class="ghost-button">閉じる</button>
+          </div>
+
+          <section class="settings-section">
+            <label class="setting-label">保存先フォルダ</label>
+            <div id="download-folder-label" class="path-chip"></div>
+            <div class="dialog-inline-actions">
+              <button id="download-choose-folder-button" type="button" class="secondary-button">変更</button>
+            </div>
+          </section>
+
+          <section class="settings-section">
+            <label class="setting-label" for="download-file-name">ファイル名</label>
+            <input id="download-file-name" class="dialog-input" type="text" />
+            <label class="download-toggle-row">
+              <input id="download-use-lesson-folder" type="checkbox" />
+              <span>第○回フォルダに保存する</span>
+            </label>
+            <select id="download-lesson-folder" class="dialog-select" disabled>
+              <option value="">第1回〜第15回を選択</option>
+            </select>
+          </section>
+
+          <menu class="dialog-actions">
+            <button id="download-open-pdf-button" type="button" class="secondary-button">別タブで開く</button>
+            <button id="download-save-button" type="button" class="secondary-button">保存する</button>
+          </menu>
+        </form>
+      </dialog>
+
+      <webview id="dashboard-webview" class="dashboard-webview" partition="persist:fuzzy"></webview>
+      <div id="toast-stack" class="toast-stack"></div>
+    </div>
+
+    <script src="./renderer.js"></script>
+  </body>
+</html>
