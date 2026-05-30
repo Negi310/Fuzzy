@@ -1,0 +1,24 @@
+const { contextBridge, ipcRenderer } = require("electron");
+
+contextBridge.exposeInMainWorld("fuzzyApi", {
+  getDefaults: () => ipcRenderer.invoke("app:defaults"),
+  updatePreferences: (payload) => ipcRenderer.invoke("app:preferences:update", payload),
+  getState: () => ipcRenderer.invoke("state:get"),
+  chooseRootDirectory: () => ipcRenderer.invoke("root:choose"),
+  listDirectory: (targetPath) => ipcRenderer.invoke("directory:list", targetPath),
+  prepareMapping: (payload) => ipcRenderer.invoke("mapping:prepare", payload),
+  saveMapping: (payload) => ipcRenderer.invoke("mapping:save", payload),
+  createDefaultFolderMapping: (payload) => ipcRenderer.invoke("mapping:create-default-folder", payload),
+  getSuggestions: (courseName) => ipcRenderer.invoke("mapping:suggestions", courseName),
+  chooseFolderForMapping: () => ipcRenderer.invoke("mapping:choose-folder"),
+  openCourseTabForFolder: (folderPath) => ipcRenderer.invoke("course:open-for-folder", folderPath),
+  registerWebview: (payload) => ipcRenderer.send("webview:register", payload),
+  unregisterWebview: (payload) => ipcRenderer.send("webview:unregister", payload),
+  updateTabContext: (payload) => ipcRenderer.send("tab-context:update", payload),
+  requestBatchDownload: (tabId) => ipcRenderer.invoke("download:batch", tabId),
+  startCustomDownload: (payload) => ipcRenderer.invoke("download:start-custom", payload),
+  onDownloadEvent: (handler) => ipcRenderer.on("download:event", (_event, payload) => handler(payload)),
+  onDownloadPrompt: (handler) => ipcRenderer.on("download:prompt", (_event, payload) => handler(payload)),
+  onOpenCourseTab: (handler) => ipcRenderer.on("course:open-tab", (_event, payload) => handler(payload)),
+  onOpenRemotePdf: (handler) => ipcRenderer.on("pdf:open-remote", (_event, payload) => handler(payload)),
+});

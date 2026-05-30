@@ -1,0 +1,13 @@
+{
+  "name": "fuzzy",
+  "version": "0.1.0",
+  "description": "Moodle-integrated desktop workspace for local file organization",
+  "main": "src/main.js",
+  "scripts": {
+    "start": "electron .",
+    "test": "node --test"
+  },
+  "devDependencies": {
+    "electron": "^37.0.0"
+  }
+}
