@@ -1,6 +1,6 @@
 const fs = require("node:fs");
 const path = require("node:path");
-const { app, BrowserWindow, dialog, ipcMain, session, shell, webContents } = require("electron");
+const { app, BrowserWindow, dialog, ipcMain, nativeImage, session, shell, webContents } = require("electron");
 
 const { rankCandidates } = require("./similarity");
 const { Store } = require("./store");
@@ -55,6 +55,70 @@ function isDownloadLikeUrl(targetUrl) {
   );
 }
 
+function inferFileNameFromUrl(targetUrl) {
+  try {
+    const parsed = new URL(targetUrl || "");
+    const fileName = decodeURIComponent(parsed.pathname.split("/").at(-1) || "");
+    return fileName || "";
+  } catch (_error) {
+    return "";
+  }
+}
+
+function shouldReplacePlaceholderFileName(fileName) {
+  const normalized = String(fileName || "").trim().toLowerCase();
+  return !normalized || ["download", "view.php", "view.htm", "view.html"].includes(normalized);
+}
+
+function parseContentDispositionFileName(headerValue) {
+  const value = String(headerValue || "");
+  const utf8Match = value.match(/filename\*\s*=\s*UTF-8''([^;]+)/i);
+  if (utf8Match) {
+    try {
+      return decodeURIComponent(utf8Match[1]);
+    } catch (_error) {
+      return utf8Match[1];
+    }
+  }
+
+  const simpleMatch = value.match(/filename\s*=\s*"([^"]+)"/i) || value.match(/filename\s*=\s*([^;]+)/i);
+  return simpleMatch ? simpleMatch[1].trim() : "";
+}
+
+function extractEmbeddedDownloadUrl(html, baseUrl) {
+  const patterns = [
+    /https?:\/\/[^"'\\\s>]+pluginfile\.php[^"'\\\s>]*/i,
+    /\/2026\/pluginfile\.php[^"'\\\s>]*/i,
+    /content\s*=\s*["'][^"']*url=([^"']+)["']/i,
+    /location\.href\s*=\s*["']([^"']+)["']/i,
+    /window\.location\s*=\s*["']([^"']+)["']/i,
+  ];
+
+  for (const pattern of patterns) {
+    const match = html.match(pattern);
+    if (!match) {
+      continue;
+    }
+    const candidate = match[1] || match[0];
+    try {
+      return new URL(candidate, baseUrl).toString();
+    } catch (_error) {
+      continue;
+    }
+  }
+
+  return "";
+}
+
+function canPreviewRemoteFile(targetUrl, mimeType = "") {
+  return (
+    /\.pdf(\?|$)/i.test(targetUrl) ||
+    /^application\/pdf\b/i.test(mimeType) ||
+    /^text\//i.test(mimeType) ||
+    /^image\//i.test(mimeType)
+  );
+}
+
 function sanitizeFolderName(name) {
   return name
     .replace(/[<>:"/\\|?*\x00-\x1F]/g, " ")
@@ -97,6 +161,19 @@ function uniqueFilePath(targetPath) {
   }
 }
 
+function buildDuplicatePath(targetPath) {
+  const parsed = path.parse(targetPath);
+  let index = 1;
+  while (true) {
+    const suffix = index === 1 ? " - Copy" : ` - Copy (${index})`;
+    const candidate = path.join(parsed.dir, `${parsed.name}${suffix}${parsed.ext}`);
+    if (!fs.existsSync(candidate)) {
+      return candidate;
+    }
+    index += 1;
+  }
+}
+
 function getRootDir() {
   const state = store.getState();
   return state.rootDir || path.join(app.getPath("downloads"), "Fuzzy");
@@ -117,7 +194,9 @@ function getFolderCandidates() {
 }
 
 function prepareMapping(courseName) {
-  const existing = store.findMappingByCourse(courseName);
+  const existing = store.findMapping({
+    courseName,
+  });
   if (existing) {
     return {
       existing,
@@ -142,6 +221,14 @@ function prepareMapping(courseName) {
 }
 
 function resolveMapping(courseName, courseUrl = "") {
+  const existing = store.findMapping({
+    courseName,
+    courseUrl,
+  });
+  if (existing) {
+    return { folderPath: existing.folderPath, matchType: existing.matchType || "manual", suggestions: [] };
+  }
+
   const prepared = prepareMapping(courseName);
   if (prepared.existing) {
     return { folderPath: prepared.existing.folderPath, matchType: prepared.existing.matchType || "manual", suggestions: [] };
@@ -172,7 +259,10 @@ function resolveMapping(courseName, courseUrl = "") {
 function listDirectory(targetPath) {
   const rootDir = getRootDir();
   ensureDirectory(rootDir);
-  const safeTarget = targetPath && isSubPath(rootDir, targetPath) ? targetPath : rootDir;
+  const requestedPath = path.resolve(targetPath || rootDir);
+  const safeTarget = fs.existsSync(requestedPath) && fs.statSync(requestedPath).isDirectory()
+    ? requestedPath
+    : rootDir;
   const entries = fs.readdirSync(safeTarget, { withFileTypes: true })
     .map((entry) => {
       const entryPath = path.join(safeTarget, entry.name);
@@ -181,6 +271,7 @@ function listDirectory(targetPath) {
         name: entry.name,
         path: entryPath,
         isDirectory: entry.isDirectory(),
+        withinRoot: isSubPath(rootDir, entryPath),
         modifiedAt: stats.mtime.toISOString(),
         size: entry.isDirectory() ? null : stats.size,
       };
@@ -192,6 +283,21 @@ function listDirectory(targetPath) {
     currentDir: safeTarget,
     entries,
   };
+}
+
+async function buildDragIcon(targetPath) {
+  try {
+    const icon = await app.getFileIcon(targetPath, { size: "normal" });
+    if (!icon.isEmpty()) {
+      return icon;
+    }
+  } catch (_error) {
+    // Fall back to a tiny generated icon when the shell icon is unavailable.
+  }
+
+  return nativeImage.createFromDataURL(
+    "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAQAAAAAYLlVAAAA8ElEQVR4Ae3XsQ2DQBBF0Q+NQY4M4QLM4Bys4AnM4AjOwN1QHyvDOMkMt2rt7Nmzu13R5pTKty+O+kO5RAAAAAAAAAAAAICR9wMyoVo9hw3rroWAt4EvsC0BpvyEukgqS0bkkCm1cW0BpGbkADVYAKjwxKF1uHmIiiaTZGi4ZTSdKCbFf8gDuwZQhQAEjrISFRCGDpa2BkLomqKgJo0aoArkC5AOIDMDEwZ0AqSdzdrIW6DCQE4kYvNysGEKMluSleqrs9jwELyhlHLLJoPLD114F8nGMD4HzyBbs6k8ZZrguSu2Ce279b9Ec/WWavOXJeAAAAAAAAAAAAAACA74B/A9vywgq6Z9YAAAAASUVORK5CYII="
+  );
 }
 
 function sendToRenderer(channel, payload) {
@@ -219,6 +325,52 @@ function emitRemotePdfOpen(sourceContentsId, pdfUrl) {
     fileName,
     courseName: context.courseName || "",
   });
+}
+
+function emitRemoteFileOpen(sourceContentsId, fileUrl, fileName = "") {
+  const sourceTabId = webContentsToTab.get(sourceContentsId);
+  const context = tabRegistry.get(sourceTabId) ?? {};
+
+  sendToRenderer("file:open-remote", {
+    sourceTabId,
+    fileUrl,
+    fileName: fileName || inferFileNameFromUrl(fileUrl) || "download",
+    courseName: context.courseName || "",
+  });
+}
+
+function emitPreviewFileOpen(sourceContentsId, localPath, fileName = "") {
+  const sourceTabId = webContentsToTab.get(sourceContentsId);
+  const context = tabRegistry.get(sourceTabId) ?? {};
+
+  sendToRenderer("file:open-preview", {
+    sourceTabId,
+    localPath,
+    fileName: fileName || path.basename(localPath) || "download",
+    courseName: context.courseName || "",
+  });
+}
+
+function buildPreviewPath(fileName) {
+  const previewDir = path.join(app.getPath("userData"), "preview-cache");
+  ensureDirectory(previewDir);
+  return uniqueFilePath(path.join(previewDir, sanitizeFileName(fileName || "download")));
+}
+
+function finalizeSavedFile(sourcePath, folderPath, requestedFileName = "", lessonFolder = "") {
+  let targetFolder = folderPath;
+  if (lessonFolder) {
+    targetFolder = path.join(targetFolder, lessonFolder);
+  }
+  ensureDirectory(targetFolder);
+
+  const actualFileName = path.basename(sourcePath);
+  const targetFileName = shouldReplacePlaceholderFileName(requestedFileName)
+    ? actualFileName
+    : sanitizeFileName(requestedFileName);
+  const finalPath = uniqueFilePath(path.join(targetFolder, targetFileName));
+  fs.copyFileSync(sourcePath, finalPath);
+  return finalPath;
 }
 
 function buildInitialState() {
@@ -297,6 +449,14 @@ app.whenReady().then(() => {
       return;
     }
 
+    contents.once("destroyed", () => {
+      const tabId = webContentsToTab.get(contents.id);
+      webContentsToTab.delete(contents.id);
+      if (tabId) {
+        tabRegistry.delete(tabId);
+      }
+    });
+
     contents.on("context-menu", (event, params) => {
       if (!params.linkURL || !isDownloadLikeUrl(params.linkURL)) {
         return;
@@ -317,13 +477,22 @@ app.whenReady().then(() => {
         fileName,
         label: params.linkText || "",
         pageUrl: params.pageURL || "",
+        x: params.x ?? 0,
+        y: params.y ?? 0,
       });
     });
 
     contents.on("will-navigate", (event, targetUrl) => {
-      if (isPdfUrl(targetUrl)) {
+      if (isDownloadLikeUrl(targetUrl)) {
         event.preventDefault();
-        emitRemotePdfOpen(contents.id, targetUrl);
+        const tabId = webContentsToTab.get(contents.id);
+        if (tabId) {
+          queueCustomDownload(tabId, {
+            mode: "preview",
+            fileName: inferFileNameFromUrl(targetUrl) || "download",
+          });
+          contents.downloadURL(targetUrl);
+        }
         return;
       }
 
@@ -334,8 +503,15 @@ app.whenReady().then(() => {
     });
 
     contents.setWindowOpenHandler(({ url }) => {
-      if (isPdfUrl(url)) {
-        emitRemotePdfOpen(contents.id, url);
+      if (isDownloadLikeUrl(url)) {
+        const tabId = webContentsToTab.get(contents.id);
+        if (tabId) {
+          queueCustomDownload(tabId, {
+            mode: "preview",
+            fileName: inferFileNameFromUrl(url) || "download",
+          });
+          contents.downloadURL(url);
+        }
         return { action: "deny" };
       }
 
@@ -357,19 +533,60 @@ app.whenReady().then(() => {
     const context = tabRegistry.get(tabId) ?? {};
     const courseName = context.courseName || context.title || "Unsorted";
     const customRequest = tabId ? shiftCustomDownload(tabId) : null;
-    const resolved = customRequest ? null : resolveMapping(courseName, context.url || "");
+    const resolved = customRequest?.mode === "save" ? resolveMapping(courseName, context.url || "") : null;
 
     let finalPath = "";
     let targetFolder = "";
 
-    if (customRequest) {
+    if (customRequest?.mode === "preview") {
+      finalPath = buildPreviewPath(customRequest.fileName || item.getFilename() || inferFileNameFromUrl(item.getURL()) || "download");
+      item.setSavePath(finalPath);
+      item.once("done", (_doneEvent, state) => {
+        if (state === "completed") {
+          customRequest.resolve?.({
+            localPath: finalPath,
+            fileName: path.basename(finalPath),
+          });
+          emitPreviewFileOpen(contents.id, finalPath, path.basename(finalPath));
+          return;
+        }
+        customRequest.reject?.(new Error("ファイルのプレビュー準備に失敗しました。"));
+        sendToRenderer("download:event", {
+          type: "blocked",
+          message: "ファイルのプレビュー準備に失敗しました。",
+        });
+      });
+      return;
+    }
+
+    if (customRequest?.mode === "save") {
+      const actualFileName = item.getFilename() || inferFileNameFromUrl(item.getURL()) || "download";
+      const targetFileName = shouldReplacePlaceholderFileName(customRequest.fileName)
+        ? actualFileName
+        : customRequest.fileName;
       targetFolder = customRequest.folderPath;
       if (customRequest.lessonFolder) {
         targetFolder = path.join(targetFolder, customRequest.lessonFolder);
       }
       ensureDirectory(targetFolder);
-      finalPath = uniqueFilePath(path.join(targetFolder, sanitizeFileName(customRequest.fileName)));
+      finalPath = uniqueFilePath(path.join(targetFolder, sanitizeFileName(targetFileName)));
     } else {
+      const autoPreviewPath = buildPreviewPath(item.getFilename() || inferFileNameFromUrl(item.getURL()) || "download");
+      item.setSavePath(autoPreviewPath);
+      item.once("done", (_doneEvent, state) => {
+        if (state === "completed") {
+          emitPreviewFileOpen(contents.id, autoPreviewPath, path.basename(autoPreviewPath));
+          return;
+        }
+        sendToRenderer("download:event", {
+          type: "blocked",
+          message: "ファイルのプレビュー準備に失敗しました。",
+        });
+      });
+      return;
+    }
+
+    if (!targetFolder) {
       targetFolder = resolved.folderPath;
       ensureDirectory(targetFolder);
       finalPath = uniqueFilePath(path.join(targetFolder, item.getFilename()));
@@ -475,6 +692,18 @@ ipcMain.handle("root:choose", async () => {
 ipcMain.handle("directory:list", (_event, targetPath) => listDirectory(targetPath));
 
 ipcMain.handle("mapping:prepare", (_event, payload) => {
+  const existing = store.findMapping({
+    courseName: payload.courseName || "",
+    courseUrl: payload.courseUrl || "",
+    courseId: payload.courseId || "",
+  });
+  if (existing) {
+    return {
+      existing,
+      suggestions: [],
+      suggestedFolderPath: existing.folderPath,
+    };
+  }
   return prepareMapping(payload.courseName || "");
 });
 
@@ -508,7 +737,10 @@ ipcMain.handle("mapping:save", (_event, payload) => {
   }
 
   ensureDirectory(payload.folderPath);
-  return store.upsertMapping(payload);
+  return store.upsertMapping({
+    ...payload,
+    courseId: payload.courseId || extractCourseIdFromUrl(payload.courseUrl),
+  });
 });
 
 ipcMain.handle("mapping:create-default-folder", (_event, payload) => {
@@ -517,6 +749,7 @@ ipcMain.handle("mapping:create-default-folder", (_event, payload) => {
   ensureDirectory(folderPath);
   return store.upsertMapping({
     courseName: payload.courseName,
+    courseId: payload.courseId || extractCourseIdFromUrl(payload.courseUrl),
     courseUrl: payload.courseUrl || "",
     folderPath,
     matchType: "new-folder",
@@ -548,14 +781,160 @@ ipcMain.handle("download:start-custom", async (_event, payload) => {
     throw new Error("保存先はルートフォルダ配下から選択してください。");
   }
 
-  queueCustomDownload(payload.tabId, {
-    folderPath: payload.folderPath,
-    lessonFolder: payload.lessonFolder || "",
-    fileName: payload.fileName || "download",
-  });
+  return await new Promise((resolve, reject) => {
+    queueCustomDownload(payload.tabId, {
+      mode: "preview",
+      fileName: payload.fileName || "download",
+      resolve: (preview) => {
+        try {
+          const finalPath = finalizeSavedFile(
+            preview.localPath,
+            payload.folderPath,
+            payload.fileName || "",
+            payload.lessonFolder || "",
+          );
 
-  targetContents.downloadURL(payload.url);
+          const context = tabRegistry.get(payload.tabId) ?? {};
+          const courseName = context.courseName || context.title || "Unsorted";
+          sendToRenderer("download:event", {
+            type: "started",
+            courseName,
+            fileName: path.basename(finalPath),
+            savePath: finalPath,
+            tabId: payload.tabId,
+            folderPath: path.dirname(finalPath),
+            suggestions: [],
+            requiresReview: false,
+          });
+
+          store.addDownloadHistory({
+            courseName,
+            sourceUrl: context.url || payload.url,
+            targetPath: finalPath,
+            status: "started",
+          });
+          store.addDownloadHistory({
+            courseName,
+            sourceUrl: context.url || payload.url,
+            targetPath: finalPath,
+            status: "completed",
+          });
+
+          sendToRenderer("download:event", {
+            type: "completed",
+            courseName,
+            fileName: path.basename(finalPath),
+            savePath: finalPath,
+            tabId: payload.tabId,
+          });
+          resolve({ ok: true, savePath: finalPath });
+        } catch (error) {
+          reject(error);
+        }
+      },
+      reject,
+    });
+
+    try {
+      targetContents.downloadURL(payload.url);
+    } catch (error) {
+      shiftCustomDownload(payload.tabId);
+      reject(error);
+    }
+  });
+});
+
+ipcMain.handle("explorer:duplicate", async (_event, targetPath) => {
+  const rootDir = getRootDir();
+  if (!targetPath || !isSubPath(rootDir, targetPath) || !fs.existsSync(targetPath)) {
+    throw new Error("対象ファイルが見つかりません。");
+  }
+
+  const duplicatePath = buildDuplicatePath(targetPath);
+  const stats = fs.statSync(targetPath);
+  if (stats.isDirectory()) {
+    fs.cpSync(targetPath, duplicatePath, { recursive: true });
+  } else {
+    fs.copyFileSync(targetPath, duplicatePath);
+  }
+  return { path: duplicatePath };
+});
+
+ipcMain.handle("explorer:rename", async (_event, payload) => {
+  const rootDir = getRootDir();
+  if (!payload?.targetPath || !isSubPath(rootDir, payload.targetPath) || !fs.existsSync(payload.targetPath)) {
+    throw new Error("対象ファイルが見つかりません。");
+  }
+
+  const nextName = String(payload.nextName || "").trim();
+  if (!nextName) {
+    throw new Error("新しい名前を入力してください。");
+  }
+
+  const nextPath = path.join(path.dirname(payload.targetPath), nextName);
+  if (!isSubPath(rootDir, nextPath)) {
+    throw new Error("保存先はルートフォルダ配下である必要があります。");
+  }
+  if (fs.existsSync(nextPath)) {
+    throw new Error("同じ名前のファイルがすでに存在します。");
+  }
+
+  fs.renameSync(payload.targetPath, nextPath);
+  return { path: nextPath };
+});
+
+ipcMain.handle("explorer:delete", async (_event, targetPath) => {
+  const rootDir = getRootDir();
+  if (!targetPath || !isSubPath(rootDir, targetPath) || !fs.existsSync(targetPath)) {
+    throw new Error("対象ファイルが見つかりません。");
+  }
+
+  await shell.trashItem(targetPath);
   return { ok: true };
+});
+
+ipcMain.on("explorer:start-drag", async (event, targetPath) => {
+  const resolvedPath = path.resolve(targetPath || "");
+  if (!fs.existsSync(resolvedPath)) {
+    return;
+  }
+
+  const icon = await buildDragIcon(resolvedPath);
+  event.sender.startDrag({
+    file: resolvedPath,
+    icon,
+  });
+});
+
+ipcMain.handle("download:resolve", async (_event, payload) => {
+  return {
+    resolvedUrl: payload.url,
+    fileName: sanitizeFileName(payload.fileName || payload.label || inferFileNameFromUrl(payload.url) || "download"),
+    mimeType: "",
+    canPreview: isDownloadLikeUrl(payload.url),
+  };
+});
+
+ipcMain.handle("file:open-remote", async (_event, payload) => {
+  const targetContents = findWebContentsForTab(payload.tabId);
+  if (!targetContents) {
+    throw new Error("対象のタブが見つかりません。");
+  }
+
+  return await new Promise((resolve, reject) => {
+    queueCustomDownload(payload.tabId, {
+      mode: "preview",
+      fileName: payload.fileName || payload.label || inferFileNameFromUrl(payload.url) || "download",
+      resolve,
+      reject,
+    });
+    try {
+      targetContents.downloadURL(payload.url);
+    } catch (error) {
+      shiftCustomDownload(payload.tabId);
+      reject(error);
+    }
+  });
 });
 
 ipcMain.on("webview:register", (_event, payload) => {

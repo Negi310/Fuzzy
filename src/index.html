@@ -72,13 +72,6 @@
                 <div class="timeline-title">タイムライン</div>
                 <button id="timeline-refresh-button" type="button" class="icon-button" title="更新">⟳</button>
               </div>
-              <div class="timeline-filters">
-                <button type="button" class="filter-chip active" data-filter="all">すべて</button>
-                <button type="button" class="filter-chip" data-filter="today">今日</button>
-                <button type="button" class="filter-chip" data-filter="3days">3日以内</button>
-                <button type="button" class="filter-chip" data-filter="week">今週</button>
-                <button type="button" class="filter-chip" data-filter="expired">期限切れ</button>
-              </div>
               <div id="timeline-list" class="timeline-list"></div>
             </section>
           </div>
@@ -160,6 +153,7 @@
         </form>
       </dialog>
 
+      <div id="context-menu" class="context-menu hidden" role="menu" aria-hidden="true"></div>
       <webview id="dashboard-webview" class="dashboard-webview" partition="persist:fuzzy"></webview>
       <div id="toast-stack" class="toast-stack"></div>
     </div>
