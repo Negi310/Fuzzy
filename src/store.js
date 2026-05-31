@@ -1,6 +1,24 @@
 const fs = require("node:fs");
 const path = require("node:path");
 
+function normalizeCourseName(name) {
+  return String(name || "")
+    .replace(/\s+/g, " ")
+    .replace(/\s*[|:-]\s*Wakayama.*Moodle.*$/i, "")
+    .replace(/\s*[|:-]\s*和歌山大学.*Moodle.*$/i, "")
+    .replace(/\s*Moodle\d*\s*$/i, "")
+    .trim();
+}
+
+function extractCourseIdFromUrl(targetUrl) {
+  try {
+    const parsed = new URL(targetUrl || "");
+    return parsed.searchParams.get("id") || "";
+  } catch (_error) {
+    return "";
+  }
+}
+
 class Store {
   constructor(filePath) {
     this.filePath = filePath;
@@ -32,6 +50,10 @@ class Store {
     this.state.preferences ??= {
       dashboardAutoload: false,
     };
+    this.state.mappings = this.state.mappings.map((entry) => ({
+      ...entry,
+      courseId: entry.courseId || extractCourseIdFromUrl(entry.courseUrl),
+    }));
     return structuredClone(this.state);
   }
 
@@ -41,9 +63,16 @@ class Store {
   }
 
   upsertMapping(mapping) {
-    const index = this.state.mappings.findIndex((entry) => entry.courseName === mapping.courseName);
+    const courseId = mapping.courseId || extractCourseIdFromUrl(mapping.courseUrl);
+    const normalizedName = normalizeCourseName(mapping.courseName);
+    const index = this.state.mappings.findIndex((entry) => (
+      (courseId && (entry.courseId || extractCourseIdFromUrl(entry.courseUrl)) === courseId) ||
+      (mapping.courseUrl && entry.courseUrl === mapping.courseUrl) ||
+      normalizeCourseName(entry.courseName) === normalizedName
+    ));
     const next = {
       courseName: mapping.courseName,
+      courseId,
       folderPath: mapping.folderPath,
       courseUrl: mapping.courseUrl ?? "",
       matchType: mapping.matchType ?? "manual",
@@ -61,7 +90,18 @@ class Store {
   }
 
   findMappingByCourse(courseName) {
-    return this.state.mappings.find((entry) => entry.courseName === courseName) ?? null;
+    const normalizedName = normalizeCourseName(courseName);
+    return this.state.mappings.find((entry) => normalizeCourseName(entry.courseName) === normalizedName) ?? null;
+  }
+
+  findMapping(criteria = {}) {
+    const courseId = criteria.courseId || extractCourseIdFromUrl(criteria.courseUrl);
+    const normalizedName = normalizeCourseName(criteria.courseName);
+    return this.state.mappings.find((entry) => (
+      (courseId && (entry.courseId || extractCourseIdFromUrl(entry.courseUrl)) === courseId) ||
+      (criteria.courseUrl && entry.courseUrl === criteria.courseUrl) ||
+      (normalizedName && normalizeCourseName(entry.courseName) === normalizedName)
+    )) ?? null;
   }
 
   findMappingByFolder(folderPath) {

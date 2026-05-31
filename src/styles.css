@@ -330,7 +330,7 @@ button {
 }
 
 #timeline-panel.active {
-  grid-template-rows: auto auto minmax(0, 1fr);
+  grid-template-rows: auto minmax(0, 1fr);
   gap: 14px;
 }
 
@@ -377,6 +377,36 @@ button {
   min-width: 0;
   overflow-wrap: anywhere;
   word-break: break-word;
+}
+
+.path-text {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+}
+
+.path-segment {
+  padding: 2px 8px;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: #35506f;
+  cursor: pointer;
+}
+
+.path-segment:hover {
+  background: #eef4ff;
+}
+
+.path-segment.current {
+  background: #e8f1ff;
+  color: #174a96;
+  font-weight: 600;
+}
+
+.path-separator {
+  color: #8a9ab0;
 }
 
 .explorer-toolbar {
@@ -430,6 +460,10 @@ button {
   cursor: pointer;
 }
 
+.file-row:active {
+  cursor: grabbing;
+}
+
 .file-row:hover {
   background: #f7faff;
 }
@@ -461,22 +495,6 @@ button {
 .file-meta-text {
   color: #51637d;
   font-size: 13px;
-}
-
-.timeline-filters {
-  display: flex;
-  gap: 8px;
-  flex-wrap: wrap;
-}
-
-.filter-chip {
-  padding: 6px 12px;
-}
-
-.filter-chip.active {
-  border-color: #bfd2ee;
-  background: #eaf2ff;
-  color: #1560d8;
 }
 
 .timeline-list {
@@ -592,6 +610,43 @@ button {
   color: #1d2b3f;
 }
 
+.context-menu {
+  position: fixed;
+  min-width: 220px;
+  max-width: 280px;
+  display: grid;
+  gap: 4px;
+  padding: 8px;
+  border: 1px solid #c8d6e6;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.98);
+  box-shadow: 0 14px 30px rgba(18, 39, 69, 0.22);
+  z-index: 40;
+}
+
+.context-menu.hidden {
+  display: none;
+}
+
+.context-menu-item {
+  width: 100%;
+  padding: 9px 12px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: #1d2b3f;
+  text-align: left;
+  cursor: pointer;
+}
+
+.context-menu-item:hover {
+  background: #eef4ff;
+}
+
+.context-menu-item.danger {
+  color: #c53f3f;
+}
+
 .settings-form,
 .mapping-form,
 .download-form {
@@ -688,12 +743,15 @@ button {
 
 .dashboard-webview {
   position: fixed;
-  width: 1px;
-  height: 1px;
-  left: -9999px;
-  top: -9999px;
+  width: 1280px;
+  height: 900px;
+  right: 0;
+  bottom: 0;
+  transform: scale(0.01);
+  transform-origin: right bottom;
   opacity: 0.01;
   pointer-events: none;
+  z-index: -1;
 }
 
 @media (max-width: 1360px) {

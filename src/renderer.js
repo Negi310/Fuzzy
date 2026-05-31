@@ -24,7 +24,6 @@ const state = {
   currentDir: "",
   mappings: [],
   timelineEntries: [],
-  timelineFilter: "all",
   tabs: [],
   activeTabId: null,
   activePanelTab: "explorer",
@@ -34,6 +33,7 @@ const state = {
   pendingMappingCourse: null,
   mappingPromptedCourses: new Set(),
   downloadDraft: null,
+  contextMenu: null,
   timelineStatus: {
     state: "idle",
     message: "Timeline loading...",
@@ -72,6 +72,7 @@ const elements = {
   downloadLessonFolder: document.querySelector("#download-lesson-folder"),
   downloadOpenPdfButton: document.querySelector("#download-open-pdf-button"),
   downloadSaveButton: document.querySelector("#download-save-button"),
+  contextMenu: document.querySelector("#context-menu"),
 };
 
 function createId(prefix) {
@@ -136,6 +137,94 @@ function deriveCourseNameFromTitle(title) {
   return genericTitles.has(normalized) ? "" : normalized;
 }
 
+function hideContextMenu() {
+  state.contextMenu = null;
+  elements.contextMenu.classList.add("hidden");
+  elements.contextMenu.setAttribute("aria-hidden", "true");
+  elements.contextMenu.innerHTML = "";
+}
+
+function showContextMenu(items, x, y) {
+  state.contextMenu = { items };
+  elements.contextMenu.innerHTML = "";
+
+  for (const item of items) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = `context-menu-item ${item.tone || ""}`.trim();
+    button.textContent = item.label;
+    button.addEventListener("click", async () => {
+      hideContextMenu();
+      await item.action();
+    });
+    elements.contextMenu.appendChild(button);
+  }
+
+  elements.contextMenu.classList.remove("hidden");
+  elements.contextMenu.setAttribute("aria-hidden", "false");
+
+  const menuWidth = 240;
+  const menuHeight = items.length * 42 + 16;
+  const left = Math.min(x, window.innerWidth - menuWidth - 12);
+  const top = Math.min(y, window.innerHeight - menuHeight - 12);
+  elements.contextMenu.style.left = `${Math.max(left, 12)}px`;
+  elements.contextMenu.style.top = `${Math.max(top, 12)}px`;
+}
+
+function closestFromEventTarget(target, selector) {
+  return target instanceof Element ? target.closest(selector) : null;
+}
+
+function isWakayamaMoodleUrl(targetUrl) {
+  try {
+    const parsed = new URL(targetUrl || "");
+    return /moodle(?:\d{4})?\.wakayama-u\.ac\.jp$/i.test(parsed.hostname);
+  } catch (_error) {
+    return false;
+  }
+}
+
+function classifyMoodlePage(context) {
+  try {
+    const parsed = new URL(context?.url || "");
+    if (!/moodle(?:\d{4})?\.wakayama-u\.ac\.jp$/i.test(parsed.hostname)) {
+      return "outside";
+    }
+
+    const pathname = parsed.pathname.toLowerCase();
+    const title = normalizeCourseTitle(context?.title || "").toLowerCase();
+    if (pathname === "/2026" || pathname === "/2026/") {
+      return "home";
+    }
+    if (
+      pathname.endsWith("/my/") ||
+      pathname.endsWith("/my/index.php") ||
+      pathname.endsWith("/course/index.php") ||
+      title === "dashboard" ||
+      title === "home" ||
+      title === "my courses" ||
+      title === "ダッシュボード" ||
+      title === "ホーム" ||
+      title === "マイコース"
+    ) {
+      return "generic";
+    }
+    if (pathname.endsWith("/course/view.php") && parsed.searchParams.get("id")) {
+      return "course";
+    }
+    return "other";
+  } catch (_error) {
+    return "outside";
+  }
+}
+
+function shouldPromptForCourseMapping(tab) {
+  return classifyMoodlePage({
+    url: tab?.courseUrl || tab?.url || "",
+    title: tab?.title || "",
+  }) === "course";
+}
+
 function extractCourseIdFromUrl(targetUrl) {
   try {
     const parsed = new URL(targetUrl || "");
@@ -157,10 +246,20 @@ function getTabColor(kind) {
   if (kind === "remote-pdf") {
     return "remote-pdf";
   }
+  if (kind === "remote-file") {
+    return "remote-pdf";
+  }
   if (kind === "local-pdf") {
     return "local-pdf";
   }
+  if (kind === "local-file") {
+    return "local-pdf";
+  }
   return "browser";
+}
+
+function encodeFileUrl(targetPath) {
+  return encodeURI(`file:///${String(targetPath || "").replace(/\\/g, "/")}`);
 }
 
 function formatTimestamp(isoString) {
@@ -192,6 +291,60 @@ function formatFileSize(bytes) {
     return `${(value / 1024).toFixed(1)} KB`;
   }
   return `${(value / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function splitPathSegments(targetPath) {
+  const resolved = String(targetPath || "").replace(/\//g, "\\");
+  if (!resolved) {
+    return [];
+  }
+
+  const match = resolved.match(/^([A-Za-z]:)(\\.*)?$/);
+  if (!match) {
+    return [{ label: resolved, path: resolved }];
+  }
+
+  const drive = match[1];
+  const rest = match[2] || "";
+  const names = rest.split("\\").filter(Boolean);
+  const segments = [{ label: drive, path: `${drive}\\` }];
+  let currentPath = `${drive}\\`;
+  for (const name of names) {
+    currentPath = currentPath.endsWith("\\") ? `${currentPath}${name}` : `${currentPath}\\${name}`;
+    segments.push({
+      label: name,
+      path: currentPath,
+    });
+  }
+  return segments;
+}
+
+function renderCurrentPath(targetPath) {
+  elements.currentDirLabel.innerHTML = "";
+  const segments = splitPathSegments(targetPath);
+  if (!segments.length) {
+    elements.currentDirLabel.textContent = UI_TEXT.rootUnset;
+    return;
+  }
+
+  for (const [index, segment] of segments.entries()) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = `path-segment ${index === segments.length - 1 ? "current" : ""}`.trim();
+    button.textContent = segment.label;
+    button.title = segment.path;
+    button.addEventListener("click", async () => {
+      await loadDirectory(segment.path, { syncBrowserFromDirectory: false });
+    });
+    elements.currentDirLabel.appendChild(button);
+
+    if (index < segments.length - 1) {
+      const separator = document.createElement("span");
+      separator.className = "path-separator";
+      separator.textContent = "›";
+      elements.currentDirLabel.appendChild(separator);
+    }
+  }
 }
 
 function buildLessonOptions() {
@@ -260,24 +413,32 @@ function classifyTimelineEntry(entry) {
   return { bucket: "later", label: "今後", dueDate, badge: "予定", badgeTone: "" };
 }
 
-function matchTimelineFilter(entry) {
-  if (state.timelineFilter === "all") {
-    return true;
+function shouldHideTimelineEntry(entry) {
+  const title = String(entry?.title || "").trim();
+  return (
+    !title ||
+    title === "すべて" ||
+    title.includes("日付で並び替える") ||
+    title.includes("コースで並び替える") ||
+    title.includes("提出をアップロード・入力する")
+  );
+}
+
+function compareTimelineEntries(left, right) {
+  const leftMeta = classifyTimelineEntry(left);
+  const rightMeta = classifyTimelineEntry(right);
+  const leftTime = leftMeta.dueDate?.getTime() ?? Number.MAX_SAFE_INTEGER;
+  const rightTime = rightMeta.dueDate?.getTime() ?? Number.MAX_SAFE_INTEGER;
+  if (leftTime !== rightTime) {
+    return leftTime - rightTime;
   }
-  const meta = classifyTimelineEntry(entry);
-  if (state.timelineFilter === "today") {
-    return meta.bucket === "today";
+
+  const courseOrder = String(left.courseName || "").localeCompare(String(right.courseName || ""), "ja");
+  if (courseOrder !== 0) {
+    return courseOrder;
   }
-  if (state.timelineFilter === "3days") {
-    return ["today", "tomorrow", "3days"].includes(meta.bucket);
-  }
-  if (state.timelineFilter === "week") {
-    return ["today", "tomorrow", "3days", "week"].includes(meta.bucket);
-  }
-  if (state.timelineFilter === "expired") {
-    return meta.bucket === "expired";
-  }
-  return true;
+
+  return String(left.title || "").localeCompare(String(right.title || ""), "ja");
 }
 
 function renderSidePanelVisibility() {
@@ -372,6 +533,24 @@ function createRemotePdfTab(pdfUrl, title, sourceTab) {
   activateTab(tab.id);
 }
 
+function createRemoteFileTab(fileUrl, title, sourceTab) {
+  const tab = {
+    id: createId("file-remote"),
+    kind: "remote-file",
+    title,
+    url: fileUrl,
+    courseName: sourceTab?.courseName || "",
+    courseId: sourceTab?.courseId || "",
+    courseUrl: sourceTab?.courseUrl || sourceTab?.url || "",
+    contentEl: null,
+    webviewEl: null,
+    webContentsId: null,
+  };
+  state.tabs.push(tab);
+  mountTab(tab);
+  activateTab(tab.id);
+}
+
 function closeTab(tabId) {
   const tab = state.tabs.find((entry) => entry.id === tabId);
   if (!tab) {
@@ -385,7 +564,19 @@ function closeTab(tabId) {
     });
   }
 
+  try {
+    tab.webviewEl?.stop?.();
+    if (tab.webviewEl) {
+      tab.webviewEl.src = "about:blank";
+    }
+  } catch (_error) {
+    // Ignore teardown failures while closing tabs.
+  }
+
+  tab.webviewEl?.remove();
+  tab.webviewEl = null;
   tab.contentEl?.remove();
+  tab.contentEl = null;
   state.tabs = state.tabs.filter((entry) => entry.id !== tabId);
 
   if (!state.tabs.length) {
@@ -480,45 +671,84 @@ function scheduleDashboardTimelinePull() {
   scheduleDashboardTimelinePull.timer = setTimeout(async () => {
     try {
       const result = await elements.dashboardWebview.executeJavaScript(`
-        (() => {
-          const selectors = [
-            "[data-region*='timeline'] a[href]",
-            "[data-region='event-list-content'] a[href]",
-            "[data-region='event-list-item'] a[href]",
-            ".block_timeline a[href]",
-            ".timeline a[href]",
-            "[data-block='timeline'] a[href]",
-            ".event-list-item a[href]",
-            ".block_calendar_upcoming a[href]",
-            ".activity-name a[href]"
+        (async () => {
+          const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+          const timelineSelectors = [
+            "[data-region*='timeline']",
+            ".block_timeline",
+            ".timeline"
           ];
-          const anchors = selectors.flatMap((selector) => [...document.querySelectorAll(selector)]);
-          const seen = new Set();
-          const items = anchors.flatMap((anchor) => {
-            const href = anchor.href;
-            const label = (anchor.textContent || "").trim().replace(/\\s+/g, " ");
-            if (!href || !label || seen.has(href)) {
-              return [];
-            }
-            seen.add(href);
-            const container = anchor.closest("li, article, .event, .list-group-item, .activity-item, tr, .timeline-event");
-            const nearbyText = (container?.textContent || "").replace(/\\s+/g, " ").trim();
-            const match = href.match(/[?&]id=(\\d+)/);
-            return [{
-              id: href + "::" + label,
-              href,
-              title: label,
-              courseName: nearbyText.replace(label, "").trim().slice(0, 120),
-              courseId: match ? match[1] : "",
-              rawText: nearbyText
-            }];
-          });
-          return {
-            title: document.title,
-            url: location.href,
-            hasLoginForm: Boolean(document.querySelector("form[action*='login'], input[type='password']")),
-            items
+
+          const collect = () => {
+            const primaryAnchors = [
+              ...document.querySelectorAll("h6.event-name.mb-0.pb-1.text-truncate a[href]")
+            ];
+            const fallbackAnchors = [
+              ...document.querySelectorAll(".event-name a[href]")
+            ];
+            const anchors = [...primaryAnchors, ...fallbackAnchors];
+            const seen = new Set();
+            const items = anchors.flatMap((anchor) => {
+              const href = anchor.href;
+              const label = (anchor.textContent || "").trim().replace(/\\s+/g, " ");
+              if (!href || !label || seen.has(href)) {
+                return [];
+              }
+              seen.add(href);
+              const container = anchor.closest("li, article, .event, .list-group-item, .activity-item, tr, .timeline-event");
+              const nearbyText = (container?.textContent || "").replace(/\\s+/g, " ").trim();
+              const match = href.match(/[?&]id=(\\d+)/);
+              return [{
+                id: href + "::" + label,
+                href,
+                title: label,
+                courseName: nearbyText.replace(label, "").trim().slice(0, 120),
+                courseId: match ? match[1] : "",
+                rawText: nearbyText
+              }];
+            });
+
+            return {
+              title: document.title,
+              url: location.href,
+              readyState: document.readyState,
+              viewport: {
+                innerWidth: window.innerWidth,
+                innerHeight: window.innerHeight,
+                clientWidth: document.documentElement?.clientWidth || 0,
+                clientHeight: document.documentElement?.clientHeight || 0,
+              },
+              scroll: {
+                x: window.scrollX,
+                y: window.scrollY,
+              },
+              hasLoginForm: Boolean(document.querySelector("form[action*='login'], input[type='password']")),
+              eventContainerCount: document.querySelectorAll(".event-name-container").length,
+              eventNameCount: document.querySelectorAll(".event-name").length,
+              timelineRegionCount: document.querySelectorAll("[data-region*='timeline'], .timeline, .block_timeline, [data-block='timeline']").length,
+              primaryAnchorCount: primaryAnchors.length,
+              fallbackAnchorCount: fallbackAnchors.length,
+              primaryAnchorPreview: primaryAnchors.slice(0, 3).map((anchor) => anchor.outerHTML.slice(0, 280)),
+              fallbackAnchorPreview: fallbackAnchors.slice(0, 3).map((anchor) => anchor.outerHTML.slice(0, 280)),
+              items
+            };
           };
+
+          let snapshot = collect();
+          for (let attempt = 0; attempt < 12; attempt += 1) {
+            if (snapshot.primaryAnchorCount || snapshot.fallbackAnchorCount) {
+              break;
+            }
+            const timelineRegion = timelineSelectors
+              .map((selector) => document.querySelector(selector))
+              .find(Boolean);
+            timelineRegion?.scrollIntoView?.({ block: "center" });
+            window.scrollTo(0, Math.max(0, document.body.scrollHeight));
+            await delay(250);
+            snapshot = collect();
+          }
+
+          return snapshot;
         })();
       `, true);
       if (result?.hasLoginForm) {
@@ -534,7 +764,23 @@ function scheduleDashboardTimelinePull() {
       state.timelineEntries = Array.isArray(result?.items) ? result.items : [];
       state.timelineStatus = state.timelineEntries.length
         ? { state: "ready", message: "" }
-        : { state: "empty", message: `No timeline items found on: ${result?.title || "unknown page"}` };
+        : {
+          state: "empty",
+          message: [
+            `No timeline items found on: ${result?.title || "unknown page"}`,
+            `URL: ${result?.url || "-"}`,
+            `readyState: ${result?.readyState || "-"}`,
+            `viewport: ${result?.viewport?.innerWidth ?? 0}x${result?.viewport?.innerHeight ?? 0}`,
+            `doc: ${result?.viewport?.clientWidth ?? 0}x${result?.viewport?.clientHeight ?? 0}`,
+            `containers: ${result?.eventContainerCount ?? 0}`,
+            `eventNames: ${result?.eventNameCount ?? 0}`,
+            `timelineRegions: ${result?.timelineRegionCount ?? 0}`,
+            `primary: ${result?.primaryAnchorCount ?? 0}`,
+            `fallback: ${result?.fallbackAnchorCount ?? 0}`,
+            `scroll: ${result?.scroll?.x ?? 0},${result?.scroll?.y ?? 0}`,
+            `sample: ${(result?.primaryAnchorPreview?.[0] || result?.fallbackAnchorPreview?.[0] || "-").replace(/\\s+/g, " ")}`,
+          ].join(" | "),
+        };
       renderTimeline();
     } catch (_error) {
       state.timelineEntries = [];
@@ -560,7 +806,26 @@ function navigateCurrentBrowserTab(url, title = UI_TEXT.defaultBrowserTitle) {
 }
 
 function findMappingForCourse(courseName) {
-  return state.mappings.find((entry) => entry.courseName === courseName) || null;
+  const normalized = normalizeCourseTitle(courseName);
+  return state.mappings.find((entry) => {
+    const entryNormalized = normalizeCourseTitle(entry.courseName);
+    return entry.courseName === courseName || entryNormalized === normalized;
+  }) || null;
+}
+
+function findMappingForTab(tab) {
+  if (!tab) {
+    return null;
+  }
+  const courseId = tab.courseId || extractCourseIdFromUrl(tab.courseUrl || tab.url || "");
+  return state.mappings.find((entry) => {
+    const entryCourseId = entry.courseId || extractCourseIdFromUrl(entry.courseUrl);
+    return (
+      (courseId && entryCourseId === courseId) ||
+      (tab.courseUrl && entry.courseUrl === tab.courseUrl) ||
+      (tab.courseName && normalizeCourseTitle(entry.courseName) === normalizeCourseTitle(tab.courseName))
+    );
+  }) || null;
 }
 
 function findMappingForPath(targetPath) {
@@ -578,18 +843,25 @@ function findMappingForPath(targetPath) {
 }
 
 async function ensureCourseMapping(tab) {
-  if (!tab?.courseName || findMappingForCourse(tab.courseName) || state.mappingPromptedCourses.has(tab.courseName)) {
+  if (
+    !tab?.courseName ||
+    !shouldPromptForCourseMapping(tab) ||
+    findMappingForCourse(tab.courseName) ||
+    state.mappingPromptedCourses.has(tab.courseName)
+  ) {
     return;
   }
 
   state.mappingPromptedCourses.add(tab.courseName);
   state.pendingMappingCourse = {
     courseName: tab.courseName,
+    courseId: tab.courseId || extractCourseIdFromUrl(tab.courseUrl || tab.url || ""),
     courseUrl: tab.courseUrl || tab.url || "",
   };
 
   const prepared = await window.fuzzyApi.prepareMapping({
     courseName: tab.courseName,
+    courseId: tab.courseId || extractCourseIdFromUrl(tab.courseUrl || tab.url || ""),
     courseUrl: tab.courseUrl || tab.url || "",
   });
 
@@ -654,6 +926,56 @@ function mountBrowserLikeTab(tab, usePreload = true) {
     });
   });
 
+  webview.addEventListener("ipc-message", (event) => {
+    const [payload] = event.args;
+    if (!payload) {
+      return;
+    }
+
+    if (event.channel === "download-context") {
+      void (async () => {
+        try {
+          await window.fuzzyApi.openRemoteFileTab({
+            tabId: tab.id,
+            url: payload.url,
+            fileName: payload.fileName || payload.label || "download",
+          });
+        } catch (error) {
+          toast(error.message, "error");
+        }
+      })();
+      return;
+    }
+
+    if (event.channel !== "page-context") {
+      return;
+    }
+
+    const pageType = classifyMoodlePage(payload);
+    tab.url = payload.url || tab.url;
+    tab.courseUrl = payload.url || tab.courseUrl || tab.url;
+    tab.courseId = payload.courseId || extractCourseIdFromUrl(tab.url);
+    tab.courseName = pageType === "course" ? payload.courseName || "" : "";
+    tab.title = tab.courseName || payload.title || tab.title;
+
+    window.fuzzyApi.updateTabContext({
+      tabId: tab.id,
+      context: {
+        url: tab.url,
+        title: payload.title || tab.title,
+        courseName: tab.courseName,
+        courseId: tab.courseId,
+      },
+    });
+
+    if (tab.id === state.activeTabId) {
+      void updateCurrentCourse(tab);
+      syncAddressBar();
+    }
+
+    renderBrowserTabs();
+  });
+
   tab.webviewEl = webview;
   tab.contentEl = contentEl;
   contentEl.appendChild(webview);
@@ -664,10 +986,14 @@ function syncTabFromWebview(tab) {
   if (!tab.webviewEl) {
     return;
   }
+  if (tab.kind !== "browser" && tab.kind !== "remote-pdf") {
+    return;
+  }
 
   tab.url = tab.webviewEl.getURL();
   const htmlTitle = tab.webviewEl.getTitle() || tab.title;
-  const courseName = deriveCourseNameFromTitle(htmlTitle);
+  const pageType = classifyMoodlePage({ url: tab.url, title: htmlTitle });
+  const courseName = pageType === "course" ? deriveCourseNameFromTitle(htmlTitle) : "";
   tab.courseName = courseName;
   tab.courseId = extractCourseIdFromUrl(tab.url);
   tab.courseUrl = tab.url;
@@ -678,7 +1004,7 @@ function syncTabFromWebview(tab) {
     context: {
       url: tab.url,
       title: htmlTitle,
-      courseName,
+      courseName: tab.courseName,
       courseId: tab.courseId,
     },
   });
@@ -694,7 +1020,7 @@ function syncTabFromWebview(tab) {
     void enableDashboardAutoload();
   }
 
-  if (courseName) {
+  if (tab.courseName && shouldPromptForCourseMapping(tab)) {
     void ensureCourseMapping(tab);
   }
 }
@@ -704,10 +1030,136 @@ function mountLocalPdfTab(tab) {
   contentEl.className = "browser-surface";
   const frame = document.createElement("iframe");
   frame.className = "pdf-frame";
-  frame.src = `file:///${tab.path.replace(/\\/g, "/")}`;
+  frame.src = encodeFileUrl(tab.path);
   contentEl.appendChild(frame);
   tab.contentEl = contentEl;
   elements.browserContent.appendChild(contentEl);
+}
+
+function mountFileFrameTab(tab, src) {
+  const contentEl = document.createElement("div");
+  contentEl.className = "browser-surface";
+  const frame = document.createElement("iframe");
+  frame.className = "pdf-frame";
+  frame.src = src;
+  contentEl.appendChild(frame);
+  tab.contentEl = contentEl;
+  elements.browserContent.appendChild(contentEl);
+}
+
+function createLocalFileTab(filePath, title) {
+  const tab = {
+    id: createId("file-local"),
+    kind: "local-file",
+    title,
+    path: filePath,
+    courseName: getActiveTab()?.courseName || "",
+    courseUrl: getActiveTab()?.courseUrl || "",
+    contentEl: null,
+  };
+  state.tabs.push(tab);
+  mountTab(tab);
+  activateTab(tab.id);
+}
+
+function openLocalFileInTab(filePath, title) {
+  try {
+    if (title.toLowerCase().endsWith(".pdf")) {
+      createLocalPdfTab(filePath, title);
+      return;
+    }
+    createLocalFileTab(filePath, title);
+  } catch (_error) {
+    toast("このファイルは別タブ表示できません", "warn");
+  }
+}
+
+async function duplicateExplorerEntry(entry) {
+  await window.fuzzyApi.duplicateExplorerEntry(entry.path);
+  await loadDirectory(state.currentDir || state.rootDir, { syncBrowserFromDirectory: false });
+  toast(`${entry.name} をコピーしました`, "success");
+}
+
+async function renameExplorerEntry(entry) {
+  const nextName = window.prompt("新しい名前を入力してください", entry.name);
+  if (!nextName || nextName === entry.name) {
+    return;
+  }
+  await window.fuzzyApi.renameExplorerEntry({
+    targetPath: entry.path,
+    nextName,
+  });
+  await loadDirectory(state.currentDir || state.rootDir, { syncBrowserFromDirectory: false });
+  toast(`${entry.name} の名前を変更しました`, "success");
+}
+
+async function deleteExplorerEntry(entry) {
+  const confirmed = window.confirm(`${entry.name} を削除しますか？`);
+  if (!confirmed) {
+    return;
+  }
+  await window.fuzzyApi.deleteExplorerEntry(entry.path);
+  await loadDirectory(state.currentDir || state.rootDir, { syncBrowserFromDirectory: false });
+  toast(`${entry.name} を削除しました`, "success");
+}
+
+function openExplorerEntryMenu(entry, x, y) {
+  const items = [];
+  if (entry.isDirectory) {
+    items.push({
+      label: "開く",
+      action: () => loadDirectory(entry.path, { syncBrowserFromDirectory: true }),
+    });
+  } else {
+    items.push({
+      label: "別タブで開く",
+      action: async () => openLocalFileInTab(entry.path, entry.name),
+    });
+  }
+  if (entry.withinRoot !== false) {
+    items.push({
+      label: "Copy",
+      action: async () => duplicateExplorerEntry(entry),
+    });
+    items.push({
+      label: "Rename",
+      action: async () => renameExplorerEntry(entry),
+    });
+    items.push({
+      label: "削除",
+      tone: "danger",
+      action: async () => deleteExplorerEntry(entry),
+    });
+  }
+  showContextMenu(items, x, y);
+}
+
+function openMoodleFileMenu(payload, tab) {
+  const x = payload.x || Math.round(window.innerWidth / 2);
+  const y = payload.y || Math.round(window.innerHeight / 2);
+  showContextMenu([
+    {
+      label: "別タブで開く",
+      action: async () => {
+        await window.fuzzyApi.openRemoteFileTab({
+          tabId: tab.id,
+          url: payload.url,
+          fileName: payload.fileName || payload.label || "download",
+        });
+      },
+    },
+    {
+      label: "保存...",
+      action: async () => {
+        await showDownloadDialog({
+          url: payload.url,
+          fileName: payload.fileName,
+          label: payload.label,
+          courseName: tab.courseName,
+        }, tab);
+      },
+    },
+  ], x, y);
 }
 
 function mountTab(tab) {
@@ -722,8 +1174,16 @@ function mountTab(tab) {
     mountBrowserLikeTab(tab, false);
     return;
   }
+  if (tab.kind === "remote-file") {
+    mountFileFrameTab(tab, tab.url);
+    return;
+  }
   if (tab.kind === "local-pdf") {
     mountLocalPdfTab(tab);
+    return;
+  }
+  if (tab.kind === "local-file") {
+    mountFileFrameTab(tab, encodeFileUrl(tab.path));
   }
 }
 
@@ -761,11 +1221,11 @@ function activateTab(tabId) {
 }
 
 async function updateCurrentCourse(tab) {
-  const courseName = tab?.courseName || UI_TEXT.noCourse;
+  const courseName = shouldPromptForCourseMapping(tab) ? tab?.courseName || UI_TEXT.noCourse : UI_TEXT.noCourse;
   elements.activeCourseLabel.textContent = courseName;
 
-  if (tab?.courseName) {
-    const mapping = findMappingForCourse(tab.courseName);
+  if (tab?.courseName && shouldPromptForCourseMapping(tab)) {
+    const mapping = findMappingForTab(tab) || findMappingForCourse(tab.courseName);
     if (mapping) {
       await loadDirectory(mapping.folderPath, { syncBrowserFromDirectory: false });
     } else {
@@ -790,6 +1250,7 @@ function renderDirectory(entries) {
     const row = document.createElement("button");
     row.type = "button";
     row.className = "file-row";
+    row.draggable = true;
     row.innerHTML = `
       <span class="file-name-cell">
         <span class="file-icon">${entry.isDirectory ? "📁" : entry.name.toLowerCase().endsWith(".pdf") ? "📄" : "🗎"}</span>
@@ -799,16 +1260,24 @@ function renderDirectory(entries) {
       <span class="file-meta-text">${entry.isDirectory ? "-" : formatFileSize(entry.size)}</span>
     `;
 
-    row.addEventListener("click", async () => {
+    row.addEventListener("click", async (event) => {
       if (entry.isDirectory) {
         await loadDirectory(entry.path, { syncBrowserFromDirectory: true });
         return;
       }
-      if (entry.name.toLowerCase().endsWith(".pdf")) {
-        createLocalPdfTab(entry.path, entry.name);
-        return;
-      }
-      toast(UI_TEXT.localOnly, "info");
+      event.preventDefault();
+      openExplorerEntryMenu(entry, event.clientX, event.clientY);
+    });
+
+    row.addEventListener("contextmenu", (event) => {
+      event.preventDefault();
+      openExplorerEntryMenu(entry, event.clientX, event.clientY);
+    });
+
+    row.addEventListener("dragstart", (event) => {
+      event.dataTransfer.effectAllowed = "copy";
+      event.dataTransfer.setData("text/plain", entry.path);
+      window.fuzzyApi.startExplorerDrag(entry.path);
     });
 
     elements.fileList.appendChild(row);
@@ -839,7 +1308,9 @@ function renderMappings() {
 function renderTimeline() {
   elements.timelineList.innerHTML = "";
   const activeTab = getActiveTab();
-  const entries = state.timelineEntries.filter(matchTimelineFilter);
+  const entries = state.timelineEntries
+    .filter((entry) => !shouldHideTimelineEntry(entry))
+    .sort(compareTimelineEntries);
 
   if (!entries.length) {
     const empty = document.createElement("div");
@@ -849,46 +1320,25 @@ function renderTimeline() {
     return;
   }
 
-  const groups = new Map();
   for (const entry of entries) {
     const meta = classifyTimelineEntry(entry);
-    const key = meta.label;
-    if (!groups.has(key)) {
-      groups.set(key, []);
-    }
-    groups.get(key).push({ entry, meta });
-  }
-
-  for (const [label, items] of groups) {
-    const group = document.createElement("div");
-    group.className = "timeline-group";
-
-    const title = document.createElement("div");
-    title.className = "timeline-group-title";
-    title.textContent = label;
-    group.appendChild(title);
-
-    for (const { entry, meta } of items) {
-      const card = document.createElement("button");
-      card.type = "button";
-      const isActive = Boolean(activeTab?.courseId && entry.courseId && activeTab.courseId === entry.courseId);
-      card.className = `timeline-card ${isActive ? "active-course" : ""}`;
-      card.innerHTML = `
-        <div class="timeline-card-top">
-          <span class="timeline-badge ${meta.badgeTone}">${escapeHtml(meta.badge)}</span>
-          <span class="timeline-card-meta">${meta.dueDate ? formatTimestamp(meta.dueDate.toISOString()) : ""}</span>
-        </div>
-        <div class="timeline-card-title">${escapeHtml(entry.title)}</div>
-        <div class="timeline-card-course">${escapeHtml(entry.courseName || UI_TEXT.noCourse)}</div>
-      `;
-      card.addEventListener("click", () => {
-        navigateCurrentBrowserTab(entry.href, entry.courseName || entry.title || UI_TEXT.defaultBrowserTitle);
-        setPanelTab("timeline");
-      });
-      group.appendChild(card);
-    }
-
-    elements.timelineList.appendChild(group);
+    const card = document.createElement("button");
+    card.type = "button";
+    const isActive = Boolean(activeTab?.courseId && entry.courseId && activeTab.courseId === entry.courseId);
+    card.className = `timeline-card ${isActive ? "active-course" : ""}`;
+    card.innerHTML = `
+      <div class="timeline-card-top">
+        <span class="timeline-badge ${meta.badgeTone}">${escapeHtml(meta.badge)}</span>
+        <span class="timeline-card-meta">${meta.dueDate ? formatTimestamp(meta.dueDate.toISOString()) : ""}</span>
+      </div>
+      <div class="timeline-card-title">${escapeHtml(entry.title)}</div>
+      <div class="timeline-card-course">${escapeHtml(entry.courseName || UI_TEXT.noCourse)}</div>
+    `;
+    card.addEventListener("click", () => {
+      navigateCurrentBrowserTab(entry.href, entry.courseName || entry.title || UI_TEXT.defaultBrowserTitle);
+      setPanelTab("timeline");
+    });
+    elements.timelineList.appendChild(card);
   }
 }
 
@@ -898,7 +1348,7 @@ async function loadDirectory(targetPath, options = {}) {
   state.rootDir = result.rootDir;
   state.currentDir = result.currentDir;
   elements.rootDirLabel.textContent = state.rootDir || UI_TEXT.rootUnset;
-  elements.currentDirLabel.textContent = state.currentDir || UI_TEXT.rootUnset;
+  renderCurrentPath(state.currentDir);
   renderDirectory(result.entries);
 
   if (syncBrowserFromDirectory) {
@@ -916,6 +1366,7 @@ async function loadDirectory(targetPath, options = {}) {
 async function saveMapping(courseName, folderPath, matchType, courseUrl) {
   const mapping = await window.fuzzyApi.saveMapping({
     courseName,
+    courseId: extractCourseIdFromUrl(courseUrl),
     folderPath,
     courseUrl,
     matchType,
@@ -951,19 +1402,27 @@ function getMappedFolderForContext(courseName) {
   return state.currentDir || state.rootDir;
 }
 
-function showDownloadDialog(payload, tab) {
+async function showDownloadDialog(payload, tab) {
   const baseFolder = getMappedFolderForContext(payload.courseName || tab.courseName);
   if (!baseFolder) {
     toast("先に保存ルートを設定してください", "warn");
     return;
   }
 
+  const resolved = await window.fuzzyApi.resolveDownload({
+    url: payload.url,
+    fileName: payload.fileName,
+    label: payload.label,
+  });
+
   state.downloadDraft = {
     tabId: tab.id,
-    url: payload.url,
-    fileName: sanitizeFileName(payload.fileName || payload.label || "download"),
+    sourceUrl: payload.url,
+    url: resolved?.resolvedUrl || payload.url,
+    fileName: sanitizeFileName(resolved?.fileName || payload.fileName || payload.label || "download"),
     folderPath: baseFolder,
     courseName: payload.courseName || tab.courseName || "",
+    canPreview: Boolean(resolved?.canPreview),
   };
 
   elements.downloadFolderLabel.textContent = state.downloadDraft.folderPath;
@@ -971,7 +1430,7 @@ function showDownloadDialog(payload, tab) {
   elements.downloadUseLessonFolder.checked = false;
   elements.downloadLessonFolder.disabled = true;
   elements.downloadLessonFolder.value = "";
-  elements.downloadOpenPdfButton.disabled = !/\.pdf(\?|$)/i.test(payload.url);
+  elements.downloadOpenPdfButton.disabled = false;
   elements.downloadDialog.showModal();
 }
 
@@ -982,6 +1441,22 @@ function setupDashboardWebview() {
 }
 
 function wireEvents() {
+  document.addEventListener("click", (event) => {
+    if (!closestFromEventTarget(event.target, "#context-menu")) {
+      hideContextMenu();
+    }
+  });
+  document.addEventListener("contextmenu", (event) => {
+    if (!closestFromEventTarget(event.target, ".file-row") && !closestFromEventTarget(event.target, "#context-menu")) {
+      hideContextMenu();
+    }
+  });
+  window.addEventListener("keydown", (event) => {
+    if (event.key === "Escape") {
+      hideContextMenu();
+    }
+  });
+
   document.querySelector(".browser-toolbar").addEventListener("click", (event) => {
     const target = event.target.closest("[data-action]");
     if (!target) {
@@ -1065,7 +1540,7 @@ function wireEvents() {
     state.currentDir = next.directory.currentDir;
     state.mappings = next.mappings;
     elements.rootDirLabel.textContent = next.rootDir || UI_TEXT.rootUnset;
-    elements.currentDirLabel.textContent = next.directory.currentDir || UI_TEXT.rootUnset;
+    renderCurrentPath(next.directory.currentDir);
     renderDirectory(next.directory.entries);
     renderMappings();
     toast("保存ルートを更新しました", "success");
@@ -1142,18 +1617,6 @@ function wireEvents() {
     scheduleDashboardRefresh();
   });
 
-  document.querySelector(".timeline-filters").addEventListener("click", (event) => {
-    const button = event.target.closest("[data-filter]");
-    if (!button) {
-      return;
-    }
-    state.timelineFilter = button.dataset.filter;
-    for (const chip of document.querySelectorAll(".filter-chip")) {
-      chip.classList.toggle("active", chip.dataset.filter === state.timelineFilter);
-    }
-    renderTimeline();
-  });
-
   elements.downloadUseLessonFolder.addEventListener("change", (event) => {
     elements.downloadLessonFolder.disabled = !event.currentTarget.checked;
   });
@@ -1171,11 +1634,20 @@ function wireEvents() {
     }
   });
 
-  elements.downloadOpenPdfButton.addEventListener("click", () => {
+  elements.downloadOpenPdfButton.addEventListener("click", async () => {
     if (!state.downloadDraft) {
       return;
     }
-    createRemotePdfTab(state.downloadDraft.url, state.downloadDraft.fileName, getActiveTab());
+    try {
+      await window.fuzzyApi.openRemoteFileTab({
+        tabId: state.downloadDraft.tabId,
+        url: state.downloadDraft.sourceUrl || state.downloadDraft.url,
+        fileName: state.downloadDraft.fileName,
+      });
+    } catch (error) {
+      toast(error.message, "error");
+      return;
+    }
     elements.downloadDialog.close();
   });
 
@@ -1199,6 +1671,7 @@ function wireEvents() {
   });
 
   window.addEventListener("resize", positionDockToggle);
+  window.addEventListener("resize", hideContextMenu);
 }
 
 async function initialize() {
@@ -1215,7 +1688,7 @@ async function initialize() {
   state.mappings = initial.mappings;
 
   elements.rootDirLabel.textContent = initial.rootDir || UI_TEXT.rootUnset;
-  elements.currentDirLabel.textContent = initial.directory.currentDir || UI_TEXT.rootUnset;
+  renderCurrentPath(initial.directory.currentDir);
 
   renderDirectory(initial.directory.entries);
   renderMappings();
@@ -1264,17 +1737,16 @@ window.fuzzyApi.onOpenRemotePdf((payload) => {
   createRemotePdfTab(payload.pdfUrl, payload.fileName, getActiveTab());
 });
 
-window.fuzzyApi.onDownloadPrompt((payload) => {
+window.fuzzyApi.onOpenPreviewFile((payload) => {
+  openLocalFileInTab(payload.localPath, payload.fileName || "download");
+});
+
+window.fuzzyApi.onDownloadPrompt(async (payload) => {
   const tab = findTab(payload.tabId) || getActiveTab();
   if (!tab) {
     return;
   }
-  showDownloadDialog({
-    url: payload.url,
-    fileName: payload.fileName,
-    label: payload.label,
-    courseName: tab.courseName,
-  }, tab);
+  openMoodleFileMenu(payload, tab);
 });
 
 initialize();
