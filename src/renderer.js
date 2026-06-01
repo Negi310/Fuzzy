@@ -1608,7 +1608,7 @@ function wireEvents() {
   elements.openCoursePageButton.addEventListener("click", () => {
     const mapping = findMappingForPath(state.currentDir);
     if (!mapping?.courseUrl) {
-      toast("このタブに対応する LMS ページがありません", "warn");
+      toast("このタブに対応する 選択した ページがありません", "warn");
       return;
     }
     navigateCurrentBrowserTab(mapping.courseUrl, mapping.courseName || UI_TEXT.defaultBrowserTitle);
