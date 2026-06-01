@@ -757,7 +757,7 @@ ipcMain.handle("mapping:create-default-folder", (_event, payload) => {
 });
 
 ipcMain.handle("course:open-for-folder", (_event, folderPath) => {
-  const mapping = store.findMappingByFolder(folderPath);
+  const mapping = store.findMappingByPath(folderPath) || store.findMappingByFolder(folderPath);
   if (!mapping?.courseUrl) {
     return { ok: false };
   }

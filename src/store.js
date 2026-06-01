@@ -108,6 +108,20 @@ class Store {
     return this.state.mappings.find((entry) => entry.folderPath === folderPath) ?? null;
   }
 
+  findMappingByPath(targetPath) {
+    const normalizedTargetPath = String(targetPath || "").toLowerCase();
+    const matches = this.state.mappings.filter((entry) => {
+      const mappingPath = String(entry.folderPath || "").toLowerCase();
+      return normalizedTargetPath === mappingPath || normalizedTargetPath.startsWith(`${mappingPath}\\`);
+    });
+
+    if (!matches.length) {
+      return null;
+    }
+
+    return matches.sort((left, right) => right.folderPath.length - left.folderPath.length)[0];
+  }
+
   addDownloadHistory(entry) {
     this.state.downloadHistory.unshift({
       ...entry,
