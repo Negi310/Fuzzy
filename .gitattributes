@@ -1,0 +1,1 @@
+dist/Fuzzy-win32-x64/Fuzzy.exe filter=lfs diff=lfs merge=lfs -text
