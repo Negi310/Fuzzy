@@ -756,6 +756,23 @@ ipcMain.handle("mapping:create-default-folder", (_event, payload) => {
   });
 });
 
+ipcMain.handle("mapping:set-submission-folder", (_event, payload) => {
+  const rootDir = getRootDir();
+  if (!payload?.submissionFolderPath || !isSubPath(rootDir, payload.submissionFolderPath)) {
+    throw new Error("提出フォルダはルートフォルダ配下である必要があります。");
+  }
+  ensureDirectory(payload.submissionFolderPath);
+  const mapping = store.setSubmissionFolder({
+    courseName: payload.courseName || "",
+    courseId: payload.courseId || extractCourseIdFromUrl(payload.courseUrl),
+    courseUrl: payload.courseUrl || "",
+  }, payload.submissionFolderPath);
+  if (!mapping) {
+    throw new Error("先にコースフォルダを紐づけてください。");
+  }
+  return mapping;
+});
+
 ipcMain.handle("course:open-for-folder", (_event, folderPath) => {
   const mapping = store.findMappingByPath(folderPath) || store.findMappingByFolder(folderPath);
   if (!mapping?.courseUrl) {

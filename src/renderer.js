@@ -64,14 +64,13 @@ const elements = {
   dashboardWebview: document.querySelector("#dashboard-webview"),
   toastStack: document.querySelector("#toast-stack"),
   openCoursePageButton: document.querySelector("#open-course-page-button"),
+  openSubmissionFolderButton: document.querySelector("#open-submission-folder-button"),
   downloadDialog: document.querySelector("#download-dialog"),
   downloadFolderLabel: document.querySelector("#download-folder-label"),
   downloadFileNameInput: document.querySelector("#download-file-name"),
   downloadChooseFolderButton: document.querySelector("#download-choose-folder-button"),
-  downloadUseLessonFolder: document.querySelector("#download-use-lesson-folder"),
-  downloadLessonFolder: document.querySelector("#download-lesson-folder"),
-  downloadOpenPdfButton: document.querySelector("#download-open-pdf-button"),
   downloadSaveButton: document.querySelector("#download-save-button"),
+  contextMenuBackdrop: document.querySelector("#context-menu-backdrop"),
   contextMenu: document.querySelector("#context-menu"),
 };
 
@@ -139,32 +138,77 @@ function deriveCourseNameFromTitle(title) {
 
 function hideContextMenu() {
   state.contextMenu = null;
+  elements.contextMenuBackdrop.classList.add("hidden");
+  elements.contextMenuBackdrop.setAttribute("aria-hidden", "true");
   elements.contextMenu.classList.add("hidden");
   elements.contextMenu.setAttribute("aria-hidden", "true");
   elements.contextMenu.innerHTML = "";
 }
 
+function renderContextMenuItems(items, level = 0) {
+  for (const item of items) {
+    if (item.children?.length) {
+      const row = document.createElement("div");
+      row.className = `context-menu-row ${item.tone || ""}`.trim();
+      row.style.paddingLeft = `${12 + level * 16}px`;
+
+      const actionButton = document.createElement("button");
+      actionButton.type = "button";
+      actionButton.className = "context-menu-item context-menu-main";
+      actionButton.textContent = item.label;
+      actionButton.addEventListener("click", async () => {
+        hideContextMenu();
+        await item.action();
+      });
+
+      const toggleButton = document.createElement("button");
+      toggleButton.type = "button";
+      toggleButton.className = "context-menu-toggle";
+      toggleButton.textContent = item.expanded ? "V" : ">";
+      toggleButton.addEventListener("click", (event) => {
+        event.stopPropagation();
+        item.expanded = !item.expanded;
+        elements.contextMenu.innerHTML = "";
+        renderContextMenuItems(state.contextMenu.items);
+      });
+
+      row.appendChild(actionButton);
+      row.appendChild(toggleButton);
+      elements.contextMenu.appendChild(row);
+    } else {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = `context-menu-item ${item.tone || ""}`.trim();
+      if (level > 0) {
+        button.classList.add("context-menu-subitem");
+      }
+      button.textContent = item.label;
+      button.style.paddingLeft = `${12 + level * 16}px`;
+      button.addEventListener("click", async () => {
+        hideContextMenu();
+        await item.action();
+      });
+      elements.contextMenu.appendChild(button);
+    }
+
+    if (item.children?.length && item.expanded) {
+      renderContextMenuItems(item.children, level + 1);
+    }
+  }
+}
+
 function showContextMenu(items, x, y) {
   state.contextMenu = { items };
   elements.contextMenu.innerHTML = "";
+  renderContextMenuItems(items);
 
-  for (const item of items) {
-    const button = document.createElement("button");
-    button.type = "button";
-    button.className = `context-menu-item ${item.tone || ""}`.trim();
-    button.textContent = item.label;
-    button.addEventListener("click", async () => {
-      hideContextMenu();
-      await item.action();
-    });
-    elements.contextMenu.appendChild(button);
-  }
-
+  elements.contextMenuBackdrop.classList.remove("hidden");
+  elements.contextMenuBackdrop.setAttribute("aria-hidden", "false");
   elements.contextMenu.classList.remove("hidden");
   elements.contextMenu.setAttribute("aria-hidden", "false");
 
   const menuWidth = 240;
-  const menuHeight = items.length * 42 + 16;
+  const menuHeight = Math.min(window.innerHeight - 24, elements.contextMenu.scrollHeight + 16);
   const left = Math.min(x, window.innerWidth - menuWidth - 12);
   const top = Math.min(y, window.innerHeight - menuHeight - 12);
   elements.contextMenu.style.left = `${Math.max(left, 12)}px`;
@@ -344,21 +388,6 @@ function renderCurrentPath(targetPath) {
       separator.textContent = "›";
       elements.currentDirLabel.appendChild(separator);
     }
-  }
-}
-
-function buildLessonOptions() {
-  elements.downloadLessonFolder.innerHTML = "";
-  const placeholder = document.createElement("option");
-  placeholder.value = "";
-  placeholder.textContent = "第1回〜第15回を選択";
-  elements.downloadLessonFolder.appendChild(placeholder);
-
-  for (let index = 1; index <= 15; index += 1) {
-    const option = document.createElement("option");
-    option.value = `第${index}回`;
-    option.textContent = `第${index}回のフォルダに保存`;
-    elements.downloadLessonFolder.appendChild(option);
   }
 }
 
@@ -831,8 +860,12 @@ function findMappingForTab(tab) {
 function findMappingForPath(targetPath) {
   const matches = state.mappings.filter((entry) => {
     const normalizedPath = targetPath.toLowerCase();
-    const mappingPath = entry.folderPath.toLowerCase();
-    return normalizedPath === mappingPath || normalizedPath.startsWith(`${mappingPath.toLowerCase()}\\`);
+    const candidatePaths = [entry.folderPath, entry.submissionFolderPath]
+      .filter(Boolean)
+      .map((value) => value.toLowerCase());
+    return candidatePaths.some((mappingPath) => (
+      normalizedPath === mappingPath || normalizedPath.startsWith(`${mappingPath}\\`)
+    ));
   });
 
   if (!matches.length) {
@@ -944,6 +977,16 @@ function mountBrowserLikeTab(tab, usePreload = true) {
           toast(error.message, "error");
         }
       })();
+      return;
+    }
+
+    if (event.channel === "download-menu") {
+      openMoodleFileMenu(payload, tab);
+      return;
+    }
+
+    if (event.channel === "hide-context-menu") {
+      hideContextMenu();
       return;
     }
 
@@ -1137,26 +1180,85 @@ function openExplorerEntryMenu(entry, x, y) {
 function openMoodleFileMenu(payload, tab) {
   const x = payload.x || Math.round(window.innerWidth / 2);
   const y = payload.y || Math.round(window.innerHeight / 2);
+  const getDefaultFolder = () => {
+    const activeMapping = findMappingForTab(tab) || findMappingForCourse(tab.courseName || payload.courseName || "");
+    return activeMapping?.folderPath || getMappedFolderForContext(payload.courseName || tab.courseName);
+  };
+
+  const saveToCourseFolder = async (customFileName = "") => {
+    await saveRemoteFile(payload, tab, {
+      folderPath: getDefaultFolder(),
+      fileName: customFileName || payload.fileName || payload.label || "download",
+    });
+  };
+
+  const saveToLesson = async (lessonNumber, customFileName = "") => {
+    const activeMapping = findMappingForTab(tab) || findMappingForCourse(tab.courseName || payload.courseName || "");
+    if (!activeMapping) {
+      toast("先にコースフォルダを紐づけてください", "warn");
+      return;
+    }
+    if (!activeMapping.submissionFolderPath) {
+      await configureSubmissionFolder(activeMapping, async (nextMapping) => {
+        await saveRemoteFile(payload, tab, {
+          folderPath: nextMapping.submissionFolderPath,
+          fileName: customFileName || payload.fileName || payload.label || "download",
+          lessonFolder: `第${lessonNumber}回`,
+        });
+      });
+      return;
+    }
+    await saveRemoteFile(payload, tab, {
+      folderPath: `${activeMapping.submissionFolderPath}\\第${lessonNumber}回`,
+      fileName: customFileName || payload.fileName || payload.label || "download",
+    });
+  };
+
   showContextMenu([
     {
-      label: "別タブで開く",
-      action: async () => {
-        await window.fuzzyApi.openRemoteFileTab({
-          tabId: tab.id,
-          url: payload.url,
-          fileName: payload.fileName || payload.label || "download",
-        });
-      },
+      label: "保存",
+      expanded: false,
+      children: [
+        ...Array.from({ length: 14 }, (_, index) => ({
+          label: `第${index + 1}回に保存`,
+          action: async () => saveToLesson(index + 1),
+        })),
+      ],
+      action: async () => saveToCourseFolder(),
     },
     {
-      label: "保存...",
+      label: "名前を付けて保存",
+      expanded: false,
+      children: [
+        ...Array.from({ length: 14 }, (_, index) => ({
+          label: `第${index + 1}回に保存`,
+          action: async () => {
+            const activeMapping = findMappingForTab(tab) || findMappingForCourse(tab.courseName || payload.courseName || "");
+            if (!activeMapping) {
+              toast("先にコースフォルダを紐づけてください", "warn");
+              return;
+            }
+            if (!activeMapping.submissionFolderPath) {
+              await configureSubmissionFolder(activeMapping, async (nextMapping) => {
+                await showDownloadDialog(payload, tab, {
+                  folderPath: `${nextMapping.submissionFolderPath}\\第${index + 1}回`,
+                  fileName: payload.fileName || payload.label || "download",
+                });
+              });
+              return;
+            }
+            await showDownloadDialog(payload, tab, {
+              folderPath: `${activeMapping.submissionFolderPath}\\第${index + 1}回`,
+              fileName: payload.fileName || payload.label || "download",
+            });
+          },
+        })),
+      ],
       action: async () => {
-        await showDownloadDialog({
-          url: payload.url,
-          fileName: payload.fileName,
-          label: payload.label,
-          courseName: tab.courseName,
-        }, tab);
+        await showDownloadDialog(payload, tab, {
+          folderPath: getDefaultFolder(),
+          fileName: payload.fileName || payload.label || "download",
+        });
       },
     },
   ], x, y);
@@ -1233,6 +1335,7 @@ async function updateCurrentCourse(tab) {
     }
   }
 
+  renderSubmissionFolderButton();
   renderTimeline();
 }
 
@@ -1363,6 +1466,8 @@ async function loadDirectory(targetPath, options = {}) {
       elements.activeCourseLabel.textContent = mapping.courseName || UI_TEXT.noCourse;
     }
   }
+
+  renderSubmissionFolderButton();
 }
 
 async function saveMapping(courseName, folderPath, matchType, courseUrl) {
@@ -1404,8 +1509,113 @@ function getMappedFolderForContext(courseName) {
   return state.currentDir || state.rootDir;
 }
 
-async function showDownloadDialog(payload, tab) {
-  const baseFolder = getMappedFolderForContext(payload.courseName || tab.courseName);
+function isWithinPath(targetPath, parentPath) {
+  const normalizedTarget = String(targetPath || "").toLowerCase();
+  const normalizedParent = String(parentPath || "").toLowerCase();
+  if (!normalizedTarget || !normalizedParent) {
+    return false;
+  }
+  return normalizedTarget === normalizedParent || normalizedTarget.startsWith(`${normalizedParent}\\`);
+}
+
+function getActiveCourseMapping() {
+  return findMappingForTab(getActiveTab()) || findMappingForPath(state.currentDir) || null;
+}
+
+function isViewingSubmissionFolder(mapping = getActiveCourseMapping()) {
+  return Boolean(mapping?.submissionFolderPath && isWithinPath(state.currentDir, mapping.submissionFolderPath));
+}
+
+function renderSubmissionFolderButton() {
+  const mapping = getActiveCourseMapping();
+  const viewingSubmission = isViewingSubmissionFolder(mapping);
+  elements.openSubmissionFolderButton.textContent = viewingSubmission ? "コースフォルダを開く" : "提出フォルダを開く";
+  elements.openSubmissionFolderButton.disabled = false;
+}
+
+async function saveRemoteFile(payload, tab, overrides = {}) {
+  const resolved = await window.fuzzyApi.resolveDownload({
+    url: payload.url,
+    fileName: overrides.fileName || payload.fileName,
+    label: payload.label,
+  });
+  const baseFolder = overrides.folderPath || getMappedFolderForContext(payload.courseName || tab.courseName);
+  if (!baseFolder) {
+    toast("先に保存ルートを設定してください", "warn");
+    return;
+  }
+
+  await window.fuzzyApi.startCustomDownload({
+    tabId: tab.id,
+    url: resolved?.resolvedUrl || payload.url,
+    folderPath: baseFolder,
+    fileName: sanitizeFileName(overrides.fileName || resolved?.fileName || payload.fileName || payload.label || "download"),
+    lessonFolder: overrides.lessonFolder || "",
+  });
+}
+
+async function configureSubmissionFolder(mapping, onComplete = null) {
+  if (!mapping) {
+    toast("先にコースフォルダを紐づけてください", "warn");
+    return;
+  }
+  const x = Math.round(window.innerWidth / 2);
+  const y = Math.round(window.innerHeight / 2);
+  showContextMenu([
+    {
+      label: "新しく提出フォルダを作成",
+      action: async () => {
+        const submissionFolderPath = `${mapping.folderPath}\\提出フォルダ`;
+        const next = await window.fuzzyApi.setSubmissionFolder({
+          courseName: mapping.courseName,
+          courseId: mapping.courseId,
+          courseUrl: mapping.courseUrl,
+          submissionFolderPath,
+        });
+        const index = state.mappings.findIndex((entry) => entry.courseName === next.courseName);
+        if (index >= 0) {
+          state.mappings[index] = next;
+        }
+        renderMappings();
+        renderSubmissionFolderButton();
+        await loadDirectory(next.submissionFolderPath, { syncBrowserFromDirectory: false });
+        if (onComplete) {
+          await onComplete(next);
+        }
+        toast("提出フォルダを作成しました", "success");
+      },
+    },
+    {
+      label: "提出フォルダのパスを指定",
+      action: async () => {
+        const submissionFolderPath = await window.fuzzyApi.chooseFolderForMapping();
+        if (!submissionFolderPath) {
+          return;
+        }
+        const next = await window.fuzzyApi.setSubmissionFolder({
+          courseName: mapping.courseName,
+          courseId: mapping.courseId,
+          courseUrl: mapping.courseUrl,
+          submissionFolderPath,
+        });
+        const index = state.mappings.findIndex((entry) => entry.courseName === next.courseName);
+        if (index >= 0) {
+          state.mappings[index] = next;
+        }
+        renderMappings();
+        renderSubmissionFolderButton();
+        await loadDirectory(next.submissionFolderPath, { syncBrowserFromDirectory: false });
+        if (onComplete) {
+          await onComplete(next);
+        }
+        toast("提出フォルダを設定しました", "success");
+      },
+    },
+  ], x, y);
+}
+
+async function showDownloadDialog(payload, tab, options = {}) {
+  const baseFolder = options.folderPath || getMappedFolderForContext(payload.courseName || tab.courseName);
   if (!baseFolder) {
     toast("先に保存ルートを設定してください", "warn");
     return;
@@ -1421,7 +1631,7 @@ async function showDownloadDialog(payload, tab) {
     tabId: tab.id,
     sourceUrl: payload.url,
     url: resolved?.resolvedUrl || payload.url,
-    fileName: sanitizeFileName(resolved?.fileName || payload.fileName || payload.label || "download"),
+    fileName: sanitizeFileName(options.fileName || resolved?.fileName || payload.fileName || payload.label || "download"),
     folderPath: baseFolder,
     courseName: payload.courseName || tab.courseName || "",
     canPreview: Boolean(resolved?.canPreview),
@@ -1429,10 +1639,6 @@ async function showDownloadDialog(payload, tab) {
 
   elements.downloadFolderLabel.textContent = state.downloadDraft.folderPath;
   elements.downloadFileNameInput.value = state.downloadDraft.fileName;
-  elements.downloadUseLessonFolder.checked = false;
-  elements.downloadLessonFolder.disabled = true;
-  elements.downloadLessonFolder.value = "";
-  elements.downloadOpenPdfButton.disabled = false;
   elements.downloadDialog.showModal();
 }
 
@@ -1443,7 +1649,14 @@ function setupDashboardWebview() {
 }
 
 function wireEvents() {
+  elements.contextMenuBackdrop.addEventListener("mousedown", hideContextMenu);
+  elements.contextMenuBackdrop.addEventListener("click", hideContextMenu);
   document.addEventListener("click", (event) => {
+    if (!closestFromEventTarget(event.target, "#context-menu")) {
+      hideContextMenu();
+    }
+  });
+  document.addEventListener("mousedown", (event) => {
     if (!closestFromEventTarget(event.target, "#context-menu")) {
       hideContextMenu();
     }
@@ -1453,6 +1666,7 @@ function wireEvents() {
       hideContextMenu();
     }
   });
+  window.addEventListener("blur", hideContextMenu);
   window.addEventListener("keydown", (event) => {
     if (event.key === "Escape") {
       hideContextMenu();
@@ -1614,13 +1828,41 @@ function wireEvents() {
     navigateCurrentBrowserTab(mapping.courseUrl, mapping.courseName || UI_TEXT.defaultBrowserTitle);
   });
 
+  elements.openSubmissionFolderButton.addEventListener("click", async (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    let mapping = getActiveCourseMapping();
+    if (!mapping) {
+      const activeTab = getActiveTab();
+      if (activeTab?.courseName && shouldPromptForCourseMapping(activeTab)) {
+        await ensureCourseMapping(activeTab);
+        mapping = getActiveCourseMapping();
+      }
+    }
+    if (!mapping) {
+      toast("先にコースフォルダを紐づけてください", "warn");
+      return;
+    }
+    if (isViewingSubmissionFolder(mapping)) {
+      await loadDirectory(mapping.folderPath, { syncBrowserFromDirectory: false });
+      return;
+    }
+    if (!mapping.submissionFolderPath) {
+      await configureSubmissionFolder(mapping);
+      return;
+    }
+    await loadDirectory(mapping.submissionFolderPath, { syncBrowserFromDirectory: false });
+  });
+
   document.querySelector("#timeline-refresh-button").addEventListener("click", () => {
     ensureDashboardLoaded();
     scheduleDashboardRefresh();
   });
 
-  elements.downloadUseLessonFolder.addEventListener("change", (event) => {
-    elements.downloadLessonFolder.disabled = !event.currentTarget.checked;
+  elements.downloadDialog.addEventListener("click", (event) => {
+    if (event.target === elements.downloadDialog) {
+      elements.downloadDialog.close();
+    }
   });
 
   elements.downloadChooseFolderButton.addEventListener("click", async () => {
@@ -1636,30 +1878,8 @@ function wireEvents() {
     }
   });
 
-  elements.downloadOpenPdfButton.addEventListener("click", async () => {
-    if (!state.downloadDraft) {
-      return;
-    }
-    try {
-      await window.fuzzyApi.openRemoteFileTab({
-        tabId: state.downloadDraft.tabId,
-        url: state.downloadDraft.sourceUrl || state.downloadDraft.url,
-        fileName: state.downloadDraft.fileName,
-      });
-    } catch (error) {
-      toast(error.message, "error");
-      return;
-    }
-    elements.downloadDialog.close();
-  });
-
   elements.downloadSaveButton.addEventListener("click", async () => {
     if (!state.downloadDraft) {
-      return;
-    }
-    const lessonFolder = elements.downloadUseLessonFolder.checked ? elements.downloadLessonFolder.value : "";
-    if (elements.downloadUseLessonFolder.checked && !lessonFolder) {
-      toast("保存先の第○回フォルダを選んでください", "warn");
       return;
     }
     await window.fuzzyApi.startCustomDownload({
@@ -1667,7 +1887,6 @@ function wireEvents() {
       url: state.downloadDraft.url,
       folderPath: state.downloadDraft.folderPath,
       fileName: sanitizeFileName(elements.downloadFileNameInput.value),
-      lessonFolder,
     });
     elements.downloadDialog.close();
   });
@@ -1677,8 +1896,6 @@ function wireEvents() {
 }
 
 async function initialize() {
-  buildLessonOptions();
-
   const defaults = await window.fuzzyApi.getDefaults();
   state.moodleHome = defaults.moodleHome;
   state.dashboardUrl = new URL("./my/", state.moodleHome).toString();
@@ -1696,6 +1913,7 @@ async function initialize() {
   renderMappings();
   renderSidePanelVisibility();
   renderPanelTabs();
+  renderSubmissionFolderButton();
   setupDashboardWebview();
   wireEvents();
 
