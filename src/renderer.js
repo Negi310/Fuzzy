@@ -1251,10 +1251,11 @@ function renderDirectory(entries) {
     row.type = "button";
     row.className = "file-row";
     row.draggable = true;
+    row.title = entry.name;
     row.innerHTML = `
       <span class="file-name-cell">
         <span class="file-icon">${entry.isDirectory ? "📁" : entry.name.toLowerCase().endsWith(".pdf") ? "📄" : "🗎"}</span>
-        <span class="file-name-text">${escapeHtml(entry.name)}</span>
+        <span class="file-name-text" title="${escapeHtml(entry.name)}">${escapeHtml(entry.name)}</span>
       </span>
       <span class="file-meta-text">${formatTimestamp(entry.modifiedAt)}</span>
       <span class="file-meta-text">${entry.isDirectory ? "-" : formatFileSize(entry.size)}</span>
@@ -1297,9 +1298,10 @@ function renderMappings() {
   for (const mapping of state.mappings) {
     const item = document.createElement("div");
     item.className = "mapping-item";
+    item.title = `${mapping.courseName}\n${mapping.folderPath}`;
     item.innerHTML = `
-      <strong>${escapeHtml(mapping.courseName)}</strong>
-      <small>${escapeHtml(mapping.folderPath)}</small>
+      <strong title="${escapeHtml(mapping.courseName)}">${escapeHtml(mapping.courseName)}</strong>
+      <small title="${escapeHtml(mapping.folderPath)}">${escapeHtml(mapping.folderPath)}</small>
     `;
     elements.mappingList.appendChild(item);
   }
@@ -1604,12 +1606,12 @@ function wireEvents() {
   });
 
   elements.openCoursePageButton.addEventListener("click", () => {
-    const activeTab = getActiveTab();
-    if (!activeTab?.courseUrl) {
+    const mapping = findMappingForPath(state.currentDir);
+    if (!mapping?.courseUrl) {
       toast("このタブに対応する LMS ページがありません", "warn");
       return;
     }
-    navigateCurrentBrowserTab(activeTab.courseUrl, activeTab.courseName || UI_TEXT.defaultBrowserTitle);
+    navigateCurrentBrowserTab(mapping.courseUrl, mapping.courseName || UI_TEXT.defaultBrowserTitle);
   });
 
   document.querySelector("#timeline-refresh-button").addEventListener("click", () => {
