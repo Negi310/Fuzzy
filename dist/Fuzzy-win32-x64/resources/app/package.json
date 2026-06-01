@@ -1,0 +1,16 @@
+{
+  "name": "fuzzy",
+  "version": "0.1.0",
+  "description": "Moodle-integrated desktop workspace for local file organization",
+  "main": "src/main.js",
+  "scripts": {
+    "start": "electron .",
+    "test": "node --test",
+    "build": "electron-packager . Fuzzy --platform=win32 --arch=x64 --out=dist --overwrite"
+  },
+  "devDependencies": {
+    "@electron/packager": "^18.4.4",
+    "electron": "^37.0.0",
+    "electron-builder": "^26.0.12"
+  }
+}
