@@ -16,7 +16,7 @@
             <button type="button" class="icon-button" data-action="forward" title="進む">→</button>
             <button type="button" class="icon-button" data-action="reload" title="再読み込み">⟳</button>
             <div class="address-shell">
-              <span class="address-icon">⌕</span>
+              <span class="address-icon">⌂</span>
               <input id="address-input" class="address-input" type="text" autocomplete="off" />
               <button type="button" class="address-button" data-action="favorite" title="お気に入り">☆</button>
               <button type="button" class="address-button" data-action="menu" title="メニュー">⋮</button>
@@ -30,31 +30,28 @@
             <div class="side-panel-tabs">
               <button id="side-tab-explorer" type="button" class="side-tab-button active">エクスプローラー</button>
               <button id="side-tab-timeline" type="button" class="side-tab-button">タイムライン</button>
+              <div class="side-panel-tab-actions">
+                <button id="panel-refresh-button" type="button" class="icon-button" title="更新">⟳</button>
+                <button id="open-settings-button" type="button" class="icon-button" title="設定">⚙</button>
+              </div>
               <button id="hide-side-panel-button" type="button" class="panel-close-button" title="右パネルを隠す">×</button>
             </div>
 
             <section id="explorer-panel" class="panel-view active">
               <div class="explorer-header">
                 <div class="course-summary">
-                  <div class="course-summary-label">現在の科目</div>
+                  <div class="course-summary-label">現在のコース</div>
                   <div id="active-course-label" class="course-summary-value">未選択</div>
                 </div>
                 <div class="explorer-header-actions">
-                  <button id="open-course-page-button" type="button" class="secondary-button">選択したページを開く</button>
+                  <button id="open-course-page-button" type="button" class="secondary-button">コースページを開く</button>
+                  <button id="open-submission-folder-button" type="button" class="secondary-button">提出フォルダを開く</button>
                 </div>
               </div>
 
               <div class="path-row">
                 <span class="path-icon">📁</span>
                 <div id="current-dir-label" class="path-text"></div>
-              </div>
-
-              <div class="explorer-toolbar">
-                <button id="new-tab-button" type="button" class="secondary-button">＋ 新規</button>
-                <button id="batch-download-button" type="button" class="icon-button" title="一括ダウンロード">⇩</button>
-                <button id="refresh-directory-button" type="button" class="icon-button" title="更新">⟳</button>
-                <button id="choose-root-button" type="button" class="secondary-button">保存先</button>
-                <button id="open-settings-button" type="button" class="icon-button" title="設定">⚙</button>
               </div>
 
               <div class="file-table">
@@ -70,7 +67,6 @@
             <section id="timeline-panel" class="panel-view">
               <div class="timeline-header">
                 <div class="timeline-title">タイムライン</div>
-                <button id="timeline-refresh-button" type="button" class="icon-button" title="更新">⟳</button>
               </div>
               <div id="timeline-list" class="timeline-list"></div>
             </section>
@@ -79,7 +75,7 @@
       </main>
 
       <div class="panel-dock">
-        <button id="dock-toggle-button" type="button" class="dock-toggle-button" title="右パネルの表示切替">＜</button>
+        <button id="dock-toggle-button" type="button" class="dock-toggle-button" title="右パネルの表示切替">◀</button>
       </div>
 
       <dialog id="settings-dialog" class="settings-dialog">
@@ -97,7 +93,7 @@
 
           <section class="settings-section">
             <div class="dialog-header compact">
-              <h2>コース紐づけ</h2>
+              <h2>コース対応</h2>
             </div>
             <div id="mapping-list" class="mapping-list"></div>
           </section>
@@ -107,7 +103,7 @@
       <dialog id="mapping-dialog" class="mapping-dialog">
         <form method="dialog" class="mapping-form">
           <div class="dialog-header">
-            <h2>コースフォルダの決定</h2>
+            <h2>コースフォルダの設定</h2>
           </div>
           <p id="mapping-course-label" class="dialog-lead"></p>
           <div id="mapping-suggestions" class="suggestions"></div>
@@ -123,7 +119,6 @@
         <form method="dialog" class="download-form">
           <div class="dialog-header">
             <h2>ダウンロード</h2>
-            <button value="cancel" class="ghost-button">閉じる</button>
           </div>
 
           <section class="settings-section">
@@ -137,22 +132,15 @@
           <section class="settings-section">
             <label class="setting-label" for="download-file-name">ファイル名</label>
             <input id="download-file-name" class="dialog-input" type="text" />
-            <label class="download-toggle-row">
-              <input id="download-use-lesson-folder" type="checkbox" />
-              <span>第○回フォルダに保存する</span>
-            </label>
-            <select id="download-lesson-folder" class="dialog-select" disabled>
-              <option value="">第1回〜第15回を選択</option>
-            </select>
           </section>
 
           <menu class="dialog-actions">
-            <button id="download-open-pdf-button" type="button" class="secondary-button">別タブで開く</button>
             <button id="download-save-button" type="button" class="secondary-button">保存する</button>
           </menu>
         </form>
       </dialog>
 
+      <div id="context-menu-backdrop" class="context-menu-backdrop hidden" aria-hidden="true"></div>
       <div id="context-menu" class="context-menu hidden" role="menu" aria-hidden="true"></div>
       <webview id="dashboard-webview" class="dashboard-webview" partition="persist:fuzzy"></webview>
       <div id="toast-stack" class="toast-stack"></div>
