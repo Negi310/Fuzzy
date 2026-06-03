@@ -1182,6 +1182,26 @@ async function openExplorerEntryWith(entry, program) {
   toast(`${entry.name} opened in ${program}`, "success");
 }
 
+async function openExplorerEntrySmart(entry) {
+  const ext = entry.name.split('.').pop().toLowerCase();
+  if (["docx", "doc"].includes(ext)) {
+    return openExplorerEntryWith(entry, "word");
+  }
+  if (["xlsx", "xls"].includes(ext)) {
+    return openExplorerEntryWith(entry, "excel");
+  }
+  if (["pptx", "ppt"].includes(ext)) {
+    return openExplorerEntryWith(entry, "powerpoint");
+  }
+  if (["pdf"].includes(ext)) {
+    return openLocalFileInTab(entry.path, entry.name);
+  }
+  if (["txt", "md", "js", "json", "html", "css", "py", "java", "c", "cpp"].includes(ext)) {
+    return openExplorerEntryWith(entry, "vscode");
+  }
+  return openLocalFileInTab(entry.path, entry.name);
+}
+
 function buildExplorerCreateMenu(parentPath) {
   return {
     label: "New",
@@ -1214,7 +1234,7 @@ function buildExplorerCreateMenu(parentPath) {
 
 function buildExplorerOpenWithMenu(entry) {
   return {
-    label: "Open with",
+    label: "別タブで開く",
     expanded: false,
     children: [
       {
@@ -1234,7 +1254,7 @@ function buildExplorerOpenWithMenu(entry) {
         action: async () => openExplorerEntryWith(entry, "vscode"),
       },
     ],
-    action: async () => openLocalFileInTab(entry.path, entry.name),
+    action: async () => openExplorerEntrySmart(entry),
   };
 }
 
@@ -1286,11 +1306,6 @@ function openExplorerEntryMenu(entry, x, y) {
     items.push({
       label: "開く",
       action: () => loadDirectory(entry.path, { syncBrowserFromDirectory: true }),
-    });
-  } else {
-    items.push({
-      label: "別タブで開く",
-      action: async () => openLocalFileInTab(entry.path, entry.name),
     });
   }
   if (entry.withinRoot !== false) {
