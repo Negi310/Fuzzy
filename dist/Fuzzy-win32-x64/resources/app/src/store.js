@@ -53,6 +53,7 @@ class Store {
     this.state.mappings = this.state.mappings.map((entry) => ({
       ...entry,
       courseId: entry.courseId || extractCourseIdFromUrl(entry.courseUrl),
+      submissionFolderPath: entry.submissionFolderPath || "",
     }));
     return structuredClone(this.state);
   }
@@ -74,6 +75,7 @@ class Store {
       courseName: mapping.courseName,
       courseId,
       folderPath: mapping.folderPath,
+      submissionFolderPath: mapping.submissionFolderPath ?? (this.state.mappings[index]?.submissionFolderPath || ""),
       courseUrl: mapping.courseUrl ?? "",
       matchType: mapping.matchType ?? "manual",
       updatedAt: new Date().toISOString(),
@@ -111,8 +113,12 @@ class Store {
   findMappingByPath(targetPath) {
     const normalizedTargetPath = String(targetPath || "").toLowerCase();
     const matches = this.state.mappings.filter((entry) => {
-      const mappingPath = String(entry.folderPath || "").toLowerCase();
-      return normalizedTargetPath === mappingPath || normalizedTargetPath.startsWith(`${mappingPath}\\`);
+      const candidatePaths = [entry.folderPath, entry.submissionFolderPath]
+        .filter(Boolean)
+        .map((value) => String(value).toLowerCase());
+      return candidatePaths.some((mappingPath) => (
+        normalizedTargetPath === mappingPath || normalizedTargetPath.startsWith(`${mappingPath}\\`)
+      ));
     });
 
     if (!matches.length) {
@@ -135,6 +141,29 @@ class Store {
     this.state.preferences ??= {};
     this.state.preferences[key] = value;
     this.save();
+  }
+
+  setSubmissionFolder(criteria = {}, submissionFolderPath = "") {
+    const mapping = this.findMapping(criteria);
+    if (!mapping) {
+      return null;
+    }
+    const index = this.state.mappings.findIndex((entry) => (
+      entry.courseName === mapping.courseName &&
+      (entry.courseId || "") === (mapping.courseId || "") &&
+      (entry.courseUrl || "") === (mapping.courseUrl || "")
+    ));
+    if (index < 0) {
+      return null;
+    }
+
+    this.state.mappings[index] = {
+      ...this.state.mappings[index],
+      submissionFolderPath,
+      updatedAt: new Date().toISOString(),
+    };
+    this.save();
+    return this.state.mappings[index];
   }
 }
 

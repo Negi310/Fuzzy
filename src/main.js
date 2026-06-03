@@ -1,4 +1,7 @@
 const fs = require("node:fs");
+const { execFileSync, spawn } = require("node:child_process");
+const http = require("node:http");
+const https = require("node:https");
 const path = require("node:path");
 const { app, BrowserWindow, dialog, ipcMain, nativeImage, session, shell, webContents } = require("electron");
 
@@ -65,6 +68,25 @@ function inferFileNameFromUrl(targetUrl) {
   }
 }
 
+function extensionFromMimeType(mimeType) {
+  const normalized = String(mimeType || "").split(";")[0].trim().toLowerCase();
+  const extensionMap = {
+    "application/pdf": ".pdf",
+    "application/zip": ".zip",
+    "application/msword": ".doc",
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document": ".docx",
+    "application/vnd.ms-powerpoint": ".ppt",
+    "application/vnd.openxmlformats-officedocument.presentationml.presentation": ".pptx",
+    "application/vnd.ms-excel": ".xls",
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": ".xlsx",
+    "image/jpeg": ".jpg",
+    "image/png": ".png",
+    "image/gif": ".gif",
+    "text/plain": ".txt",
+  };
+  return extensionMap[normalized] || "";
+}
+
 function shouldReplacePlaceholderFileName(fileName) {
   const normalized = String(fileName || "").trim().toLowerCase();
   return !normalized || ["download", "view.php", "view.htm", "view.html"].includes(normalized);
@@ -82,7 +104,20 @@ function parseContentDispositionFileName(headerValue) {
   }
 
   const simpleMatch = value.match(/filename\s*=\s*"([^"]+)"/i) || value.match(/filename\s*=\s*([^;]+)/i);
-  return simpleMatch ? simpleMatch[1].trim() : "";
+  if (!simpleMatch) {
+    return "";
+  }
+
+  const rawValue = simpleMatch[1].trim();
+  try {
+    const latin1AsUtf8 = Buffer.from(rawValue, "latin1").toString("utf8");
+    if (!latin1AsUtf8.includes("\uFFFD")) {
+      return latin1AsUtf8;
+    }
+  } catch (_error) {
+    // Fall back to the raw header value.
+  }
+  return rawValue;
 }
 
 function extractEmbeddedDownloadUrl(html, baseUrl) {
@@ -117,6 +152,132 @@ function canPreviewRemoteFile(targetUrl, mimeType = "") {
     /^text\//i.test(mimeType) ||
     /^image\//i.test(mimeType)
   );
+}
+
+function buildPreviewDir() {
+  const previewDir = path.join(app.getPath("userData"), "preview-cache");
+  ensureDirectory(previewDir);
+  return previewDir;
+}
+
+function isPreviewCachePath(targetPath) {
+  const previewDir = buildPreviewDir();
+  const resolvedTargetPath = path.resolve(String(targetPath || ""));
+  return isSubPath(previewDir, resolvedTargetPath);
+}
+
+function normalizeResolvedFileName(fileName, sourceUrl = "", mimeType = "") {
+  const fallbackName = sanitizeFileName(fileName || inferFileNameFromUrl(sourceUrl) || "download");
+  const parsed = path.parse(fallbackName);
+  if (parsed.ext) {
+    return fallbackName;
+  }
+
+  const inferredExtension = extensionFromMimeType(mimeType);
+  if (!inferredExtension) {
+    return fallbackName;
+  }
+
+  return sanitizeFileName(`${fallbackName}${inferredExtension}`);
+}
+
+async function resolveRemoteFileDetails(targetUrl, depth = 0) {
+  const fallback = {
+    resolvedUrl: targetUrl,
+    fileName: normalizeResolvedFileName(inferFileNameFromUrl(targetUrl) || "download", targetUrl, ""),
+    mimeType: "",
+    canPreview: isDownloadLikeUrl(targetUrl),
+    sourceKind: "url-only",
+  };
+
+  if (!fuzzySession || !targetUrl || depth > 2) {
+    return fallback;
+  }
+
+  try {
+    const cookies = await fuzzySession.cookies.get({ url: targetUrl });
+    const cookieHeader = cookies
+      .map((cookie) => `${cookie.name}=${cookie.value}`)
+      .join("; ");
+    const requestUrl = new URL(targetUrl);
+    const transport = requestUrl.protocol === "http:" ? http : https;
+
+    const response = await new Promise((resolve, reject) => {
+      const request = transport.request({
+        protocol: requestUrl.protocol,
+        hostname: requestUrl.hostname,
+        port: requestUrl.port || undefined,
+        path: `${requestUrl.pathname}${requestUrl.search}`,
+        method: "GET",
+        headers: cookieHeader ? { Cookie: cookieHeader } : {},
+      }, (incoming) => {
+        resolve(incoming);
+      });
+
+      request.on("error", reject);
+      request.end();
+    });
+
+    const statusCode = response.statusCode || 0;
+    const locationHeader = Array.isArray(response.headers.location)
+      ? response.headers.location[0]
+      : response.headers.location || "";
+    if (statusCode >= 300 && statusCode < 400 && locationHeader) {
+      const redirectUrl = new URL(locationHeader, targetUrl).toString();
+      response.resume();
+      return resolveRemoteFileDetails(redirectUrl, depth + 1);
+    }
+
+    const resolvedUrl = targetUrl;
+    const mimeType = Array.isArray(response.headers["content-type"])
+      ? response.headers["content-type"][0]
+      : response.headers["content-type"] || "";
+    const disposition = Array.isArray(response.headers["content-disposition"])
+      ? response.headers["content-disposition"][0]
+      : response.headers["content-disposition"] || "";
+
+    let html = "";
+    if (/^text\/html\b/i.test(mimeType)) {
+      html = await new Promise((resolve, reject) => {
+        const chunks = [];
+        let totalLength = 0;
+
+        response.on("data", (chunk) => {
+          totalLength += chunk.length;
+          if (totalLength <= 1024 * 1024) {
+            chunks.push(chunk);
+          }
+        });
+        response.on("end", () => {
+          resolve(Buffer.concat(chunks).toString("utf8"));
+        });
+        response.on("error", reject);
+      });
+      const embeddedUrl = extractEmbeddedDownloadUrl(html, resolvedUrl);
+      if (embeddedUrl && embeddedUrl !== targetUrl) {
+        return resolveRemoteFileDetails(embeddedUrl, depth + 1);
+      }
+    } else {
+      response.resume();
+    }
+
+    const headerFileName = parseContentDispositionFileName(disposition);
+    const fileName = normalizeResolvedFileName(
+      headerFileName || inferFileNameFromUrl(resolvedUrl) || inferFileNameFromUrl(targetUrl) || "download",
+      resolvedUrl,
+      mimeType,
+    );
+
+    return {
+      resolvedUrl,
+      fileName,
+      mimeType,
+      canPreview: canPreviewRemoteFile(resolvedUrl, mimeType),
+      sourceKind: headerFileName ? "content-disposition" : /^text\/html\b/i.test(mimeType) ? "html-redirect" : "direct-response",
+    };
+  } catch (_error) {
+    return fallback;
+  }
 }
 
 function sanitizeFolderName(name) {
@@ -172,6 +333,178 @@ function buildDuplicatePath(targetPath) {
     }
     index += 1;
   }
+}
+
+function buildUniqueNamedPath(parentPath, baseName, extension = "") {
+  const safeBaseName = sanitizeFileName(baseName).replace(/\.[^.]+$/, "") || "New File";
+  const safeExtension = extension || "";
+  let index = 0;
+  while (true) {
+    const suffix = index === 0 ? "" : ` (${index})`;
+    const candidate = path.join(parentPath, `${safeBaseName}${suffix}${safeExtension}`);
+    if (!fs.existsSync(candidate)) {
+      return candidate;
+    }
+    index += 1;
+  }
+}
+
+function quoteForPowerShell(value) {
+  return `'${String(value || "").replace(/'/g, "''")}'`;
+}
+
+function fileExists(targetPath) {
+  return Boolean(targetPath && fs.existsSync(targetPath));
+}
+
+function resolveProgramPath(programKey) {
+  const localAppData = process.env.LOCALAPPDATA || "";
+  const programFiles = process.env.ProgramFiles || "C:\\Program Files";
+  const programFilesX86 = process.env["ProgramFiles(x86)"] || "C:\\Program Files (x86)";
+  const commonCandidates = {
+    word: [
+      path.join(programFiles, "Microsoft Office", "Root", "Office16", "WINWORD.EXE"),
+      path.join(programFilesX86, "Microsoft Office", "Root", "Office16", "WINWORD.EXE"),
+    ],
+    excel: [
+      path.join(programFiles, "Microsoft Office", "Root", "Office16", "EXCEL.EXE"),
+      path.join(programFilesX86, "Microsoft Office", "Root", "Office16", "EXCEL.EXE"),
+    ],
+    powerpoint: [
+      path.join(programFiles, "Microsoft Office", "Root", "Office16", "POWERPNT.EXE"),
+      path.join(programFilesX86, "Microsoft Office", "Root", "Office16", "POWERPNT.EXE"),
+    ],
+    vscode: [
+      path.join(localAppData, "Programs", "Microsoft VS Code", "Code.exe"),
+      path.join(programFiles, "Microsoft VS Code", "Code.exe"),
+      path.join(programFilesX86, "Microsoft VS Code", "Code.exe"),
+    ],
+  };
+
+  return commonCandidates[programKey]?.find(fileExists) || "";
+}
+
+function launchProgram(programPath, args) {
+  const child = spawn(programPath, args, {
+    detached: true,
+    stdio: "ignore",
+    windowsHide: true,
+  });
+  child.unref();
+}
+
+function createOfficeDocumentWithPowerShell(targetPath, officeType) {
+  const quotedPath = quoteForPowerShell(targetPath);
+  const scripts = {
+    word: `
+$ErrorActionPreference = 'Stop'
+$path = ${quotedPath}
+$word = $null
+$document = $null
+try {
+  $word = New-Object -ComObject Word.Application
+  $word.Visible = $false
+  $document = $word.Documents.Add()
+  $document.SaveAs([ref]$path, [ref]16)
+} finally {
+  if ($document) { $document.Close() }
+  if ($word) { $word.Quit() }
+}
+`,
+    excel: `
+$ErrorActionPreference = 'Stop'
+$path = ${quotedPath}
+$excel = $null
+$workbook = $null
+try {
+  $excel = New-Object -ComObject Excel.Application
+  $excel.Visible = $false
+  $workbook = $excel.Workbooks.Add()
+  $workbook.SaveAs($path, 51)
+} finally {
+  if ($workbook) { $workbook.Close($false) }
+  if ($excel) { $excel.Quit() }
+}
+`,
+    powerpoint: `
+$ErrorActionPreference = 'Stop'
+$path = ${quotedPath}
+$powerpoint = $null
+$presentation = $null
+try {
+  $powerpoint = New-Object -ComObject PowerPoint.Application
+  $presentation = $powerpoint.Presentations.Add()
+  $presentation.SaveAs($path, 24)
+} finally {
+  if ($presentation) { $presentation.Close() }
+  if ($powerpoint) { $powerpoint.Quit() }
+}
+`,
+  };
+
+  const script = scripts[officeType];
+  if (!script) {
+    throw new Error("Unsupported Office document type.");
+  }
+
+  execFileSync("powershell", ["-NoProfile", "-NonInteractive", "-Command", script], {
+    encoding: "utf8",
+    stdio: "pipe",
+    windowsHide: true,
+  });
+}
+
+function createExplorerEntry(parentPath, entryKind) {
+  const rootDir = getRootDir();
+  if (!parentPath || !isSubPath(rootDir, parentPath) || !fs.existsSync(parentPath) || !fs.statSync(parentPath).isDirectory()) {
+    throw new Error("Target folder is not available.");
+  }
+
+  const kind = String(entryKind || "").toLowerCase();
+  if (kind === "folder") {
+    const targetPath = buildUniqueNamedPath(parentPath, "New Folder");
+    fs.mkdirSync(targetPath);
+    return { path: targetPath, name: path.basename(targetPath), kind };
+  }
+
+  if (kind === "text") {
+    const targetPath = buildUniqueNamedPath(parentPath, "New Text Document", ".txt");
+    fs.writeFileSync(targetPath, "", "utf8");
+    return { path: targetPath, name: path.basename(targetPath), kind };
+  }
+
+  const officeKinds = {
+    word: { extension: ".docx" },
+    excel: { extension: ".xlsx" },
+    powerpoint: { extension: ".pptx" },
+  };
+  const officeEntry = officeKinds[kind];
+  if (!officeEntry) {
+    throw new Error("Unsupported explorer item type.");
+  }
+
+  if (!resolveProgramPath(kind)) {
+    throw new Error(`${kind} is not installed on this PC.`);
+  }
+
+  const targetPath = buildUniqueNamedPath(parentPath, `New ${kind[0].toUpperCase()}${kind.slice(1)} Document`, officeEntry.extension);
+  createOfficeDocumentWithPowerShell(targetPath, kind);
+  return { path: targetPath, name: path.basename(targetPath), kind };
+}
+
+function openExplorerEntryWithProgram(targetPath, programKey) {
+  const rootDir = getRootDir();
+  if (!targetPath || !isSubPath(rootDir, targetPath) || !fs.existsSync(targetPath)) {
+    throw new Error("Target file is not available.");
+  }
+
+  const programPath = resolveProgramPath(programKey);
+  if (!programPath) {
+    throw new Error(`${programKey} is not installed on this PC.`);
+  }
+
+  launchProgram(programPath, [targetPath]);
+  return { ok: true, programPath };
 }
 
 function getRootDir() {
@@ -348,12 +681,12 @@ function emitPreviewFileOpen(sourceContentsId, localPath, fileName = "") {
     localPath,
     fileName: fileName || path.basename(localPath) || "download",
     courseName: context.courseName || "",
+    cleanupOnClose: true,
   });
 }
 
 function buildPreviewPath(fileName) {
-  const previewDir = path.join(app.getPath("userData"), "preview-cache");
-  ensureDirectory(previewDir);
+  const previewDir = buildPreviewDir();
   return uniqueFilePath(path.join(previewDir, sanitizeFileName(fileName || "download")));
 }
 
@@ -798,16 +1131,23 @@ ipcMain.handle("download:start-custom", async (_event, payload) => {
     throw new Error("保存先はルートフォルダ配下から選択してください。");
   }
 
+  const resolved = await resolveRemoteFileDetails(payload.url);
   return await new Promise((resolve, reject) => {
     queueCustomDownload(payload.tabId, {
       mode: "preview",
-      fileName: payload.fileName || "download",
+      fileName: sanitizeFileName(
+        payload.fileName && !shouldReplacePlaceholderFileName(payload.fileName)
+          ? payload.fileName
+          : resolved.fileName || inferFileNameFromUrl(payload.url) || "download"
+      ),
       resolve: (preview) => {
         try {
           const finalPath = finalizeSavedFile(
             preview.localPath,
             payload.folderPath,
-            payload.fileName || "",
+            payload.fileName && !shouldReplacePlaceholderFileName(payload.fileName)
+              ? payload.fileName
+              : resolved.fileName || "",
             payload.lessonFolder || "",
           );
 
@@ -853,7 +1193,7 @@ ipcMain.handle("download:start-custom", async (_event, payload) => {
     });
 
     try {
-      targetContents.downloadURL(payload.url);
+      targetContents.downloadURL(resolved.resolvedUrl || payload.url);
     } catch (error) {
       shiftCustomDownload(payload.tabId);
       reject(error);
@@ -875,6 +1215,14 @@ ipcMain.handle("explorer:duplicate", async (_event, targetPath) => {
     fs.copyFileSync(targetPath, duplicatePath);
   }
   return { path: duplicatePath };
+});
+
+ipcMain.handle("explorer:create", async (_event, payload) => {
+  return createExplorerEntry(payload?.parentPath, payload?.kind);
+});
+
+ipcMain.handle("explorer:open-with", async (_event, payload) => {
+  return openExplorerEntryWithProgram(payload?.targetPath, String(payload?.program || "").toLowerCase());
 });
 
 ipcMain.handle("explorer:rename", async (_event, payload) => {
@@ -924,11 +1272,14 @@ ipcMain.on("explorer:start-drag", async (event, targetPath) => {
 });
 
 ipcMain.handle("download:resolve", async (_event, payload) => {
+  const resolved = await resolveRemoteFileDetails(payload.url);
   return {
-    resolvedUrl: payload.url,
-    fileName: sanitizeFileName(payload.fileName || payload.label || inferFileNameFromUrl(payload.url) || "download"),
-    mimeType: "",
-    canPreview: isDownloadLikeUrl(payload.url),
+    ...resolved,
+    fileName: sanitizeFileName(
+      payload.fileName && !shouldReplacePlaceholderFileName(payload.fileName)
+        ? payload.fileName
+        : resolved.fileName || payload.label || inferFileNameFromUrl(payload.url) || "download"
+    ),
   };
 });
 
@@ -937,21 +1288,37 @@ ipcMain.handle("file:open-remote", async (_event, payload) => {
   if (!targetContents) {
     throw new Error("対象のタブが見つかりません。");
   }
-
+ 
+  const resolved = await resolveRemoteFileDetails(payload.url);
   return await new Promise((resolve, reject) => {
     queueCustomDownload(payload.tabId, {
       mode: "preview",
-      fileName: payload.fileName || payload.label || inferFileNameFromUrl(payload.url) || "download",
+      fileName: sanitizeFileName(
+        payload.fileName && !shouldReplacePlaceholderFileName(payload.fileName)
+          ? payload.fileName
+          : resolved.fileName || payload.label || inferFileNameFromUrl(payload.url) || "download"
+      ),
       resolve,
       reject,
     });
     try {
-      targetContents.downloadURL(payload.url);
+      targetContents.downloadURL(resolved.resolvedUrl || payload.url);
     } catch (error) {
       shiftCustomDownload(payload.tabId);
       reject(error);
     }
   });
+});
+
+ipcMain.handle("preview:cleanup", async (_event, targetPath) => {
+  if (!isPreviewCachePath(targetPath)) {
+    return { ok: false };
+  }
+
+  if (fs.existsSync(targetPath)) {
+    fs.rmSync(targetPath, { force: true });
+  }
+  return { ok: true };
 });
 
 ipcMain.on("webview:register", (_event, payload) => {
