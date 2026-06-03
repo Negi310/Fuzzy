@@ -206,6 +206,34 @@ function emitDownloadContext(event) {
   });
 }
 
+function interceptDownloadContextMenu(event) {
+  const target = event.target instanceof Element ? event.target : null;
+  const anchor = target?.closest("a[href]");
+  if (!anchor || !isDownloadLikeUrl(anchor.href)) {
+    safeSendToHost("hide-context-menu", {});
+    return;
+  }
+
+  event.preventDefault();
+  event.stopPropagation();
+  event.stopImmediatePropagation?.();
+  const fileName = decodeURIComponent(anchor.href.split("/").at(-1)?.split("?")[0] || anchor.textContent?.trim() || "download");
+  safeSendToHost("download-menu", {
+    url: anchor.href,
+    fileName,
+    label: (anchor.textContent || "").trim(),
+    courseName: deriveCourseName(),
+    courseId: extractCourseId(location.href),
+    title: document.title,
+    x: event.clientX,
+    y: event.clientY,
+  });
+}
+
+function notifyHostPointerDown(event) {
+  safeSendToHost("hide-context-menu", {});
+}
+
 function interceptDownloadClick(event) {
   const target = event.target instanceof Element ? event.target : null;
   const anchor = target?.closest("a[href]");
@@ -232,6 +260,8 @@ window.addEventListener("DOMContentLoaded", emitAll);
 window.addEventListener("load", emitAll);
 window.addEventListener("focus", emitAll);
 window.addEventListener("click", interceptDownloadClick, true);
+window.addEventListener("mousedown", notifyHostPointerDown, true);
+window.addEventListener("contextmenu", interceptDownloadContextMenu, true);
 
 const observer = new MutationObserver(emitAll);
 window.addEventListener("DOMContentLoaded", () => {

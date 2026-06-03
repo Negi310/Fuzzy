@@ -145,7 +145,7 @@ function hideContextMenu() {
   elements.contextMenu.innerHTML = "";
 }
 
-function renderContextMenuItems(items, level = 0) {
+function renderContextMenuItems(items, level = 0, container = elements.contextMenu) {
   for (const item of items) {
     if (item.children?.length) {
       const row = document.createElement("div");
@@ -170,11 +170,20 @@ function renderContextMenuItems(items, level = 0) {
         item.expanded = !item.expanded;
         elements.contextMenu.innerHTML = "";
         renderContextMenuItems(state.contextMenu.items);
+        positionContextMenu(state.contextMenu.x, state.contextMenu.y);
       });
 
       row.appendChild(actionButton);
       row.appendChild(toggleButton);
-      elements.contextMenu.appendChild(row);
+      container.appendChild(row);
+
+      if (item.expanded) {
+        const childrenContainer = document.createElement("div");
+        childrenContainer.className = "context-menu-children";
+        childrenContainer.style.marginLeft = `${12 + level * 16}px`;
+        container.appendChild(childrenContainer);
+        renderContextMenuItems(item.children, level + 1, childrenContainer);
+      }
     } else {
       const button = document.createElement("button");
       button.type = "button";
@@ -188,17 +197,24 @@ function renderContextMenuItems(items, level = 0) {
         hideContextMenu();
         await item.action();
       });
-      elements.contextMenu.appendChild(button);
-    }
-
-    if (item.children?.length && item.expanded) {
-      renderContextMenuItems(item.children, level + 1);
+      container.appendChild(button);
     }
   }
 }
 
+function positionContextMenu(x, y) {
+  const menuWidth = 240;
+  const availableHeight = Math.max(window.innerHeight - 24, 120);
+  elements.contextMenu.style.maxHeight = `${availableHeight}px`;
+  const menuHeight = Math.min(availableHeight, elements.contextMenu.scrollHeight);
+  const left = Math.min(x, window.innerWidth - menuWidth - 12);
+  const top = Math.min(y, window.innerHeight - menuHeight - 12);
+  elements.contextMenu.style.left = `${Math.max(left, 12)}px`;
+  elements.contextMenu.style.top = `${Math.max(top, 12)}px`;
+}
+
 function showContextMenu(items, x, y) {
-  state.contextMenu = { items };
+  state.contextMenu = { items, x, y };
   elements.contextMenu.innerHTML = "";
   renderContextMenuItems(items);
 
@@ -206,13 +222,7 @@ function showContextMenu(items, x, y) {
   elements.contextMenuBackdrop.setAttribute("aria-hidden", "false");
   elements.contextMenu.classList.remove("hidden");
   elements.contextMenu.setAttribute("aria-hidden", "false");
-
-  const menuWidth = 240;
-  const menuHeight = Math.min(window.innerHeight - 24, elements.contextMenu.scrollHeight + 16);
-  const left = Math.min(x, window.innerWidth - menuWidth - 12);
-  const top = Math.min(y, window.innerHeight - menuHeight - 12);
-  elements.contextMenu.style.left = `${Math.max(left, 12)}px`;
-  elements.contextMenu.style.top = `${Math.max(top, 12)}px`;
+  positionContextMenu(x, y);
 }
 
 function closestFromEventTarget(target, selector) {
@@ -335,6 +345,36 @@ function formatFileSize(bytes) {
     return `${(value / 1024).toFixed(1)} KB`;
   }
   return `${(value / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function getExplorerFileIcon(entry) {
+  if (entry.isDirectory) {
+    return { label: "📁", classNames: ["folder", "emoji"] };
+  }
+
+  const extension = String(entry.name || "").toLowerCase().split(".").at(-1) || "";
+  if (extension === "pdf") {
+    return { label: "PDF", classNames: ["pdf"] };
+  }
+  if (["doc", "docx"].includes(extension)) {
+    return { label: "W", classNames: ["word"] };
+  }
+  if (["xls", "xlsx", "csv"].includes(extension)) {
+    return { label: "X", classNames: ["excel"] };
+  }
+  if (["ppt", "pptx"].includes(extension)) {
+    return { label: "P", classNames: ["powerpoint"] };
+  }
+  if (["zip", "rar", "7z"].includes(extension)) {
+    return { label: "ZIP", classNames: ["archive"] };
+  }
+  if (["jpg", "jpeg", "png", "gif", "webp", "svg"].includes(extension)) {
+    return { label: "IMG", classNames: ["image"] };
+  }
+  if (["txt", "md"].includes(extension)) {
+    return { label: "TXT", classNames: ["text"] };
+  }
+  return { label: "FILE", classNames: ["file"] };
 }
 
 function splitPathSegments(targetPath) {
@@ -529,12 +569,13 @@ function createBrowserTab(url, title = UI_TEXT.defaultBrowserTitle) {
   activateTab(tab.id);
 }
 
-function createLocalPdfTab(filePath, title) {
+function createLocalPdfTab(filePath, title, options = {}) {
   const tab = {
     id: createId("pdf-local"),
     kind: "local-pdf",
     title,
     path: filePath,
+    cleanupOnClose: Boolean(options.cleanupOnClose),
     courseName: getActiveTab()?.courseName || "",
     courseUrl: getActiveTab()?.courseUrl || "",
     contentEl: null,
@@ -600,6 +641,10 @@ function closeTab(tabId) {
     }
   } catch (_error) {
     // Ignore teardown failures while closing tabs.
+  }
+
+  if (tab.cleanupOnClose && tab.path) {
+    void window.fuzzyApi.cleanupPreviewFile(tab.path).catch(() => {});
   }
 
   tab.webviewEl?.remove();
@@ -1090,12 +1135,13 @@ function mountFileFrameTab(tab, src) {
   elements.browserContent.appendChild(contentEl);
 }
 
-function createLocalFileTab(filePath, title) {
+function createLocalFileTab(filePath, title, options = {}) {
   const tab = {
     id: createId("file-local"),
     kind: "local-file",
     title,
     path: filePath,
+    cleanupOnClose: Boolean(options.cleanupOnClose),
     courseName: getActiveTab()?.courseName || "",
     courseUrl: getActiveTab()?.courseUrl || "",
     contentEl: null,
@@ -1105,16 +1151,96 @@ function createLocalFileTab(filePath, title) {
   activateTab(tab.id);
 }
 
-function openLocalFileInTab(filePath, title) {
+function openLocalFileInTab(filePath, title, options = {}) {
   try {
     if (title.toLowerCase().endsWith(".pdf")) {
-      createLocalPdfTab(filePath, title);
+      createLocalPdfTab(filePath, title, options);
       return;
     }
-    createLocalFileTab(filePath, title);
+    createLocalFileTab(filePath, title, options);
   } catch (_error) {
     toast("このファイルは別タブ表示できません", "warn");
   }
+}
+
+async function createExplorerEntry(parentPath, kind) {
+  const created = await window.fuzzyApi.createExplorerEntry({
+    parentPath,
+    kind,
+  });
+  if ((state.currentDir || state.rootDir) === parentPath) {
+    await loadDirectory(parentPath, { syncBrowserFromDirectory: false });
+  }
+  toast(`${created.name} created`, "success");
+}
+
+async function openExplorerEntryWith(entry, program) {
+  await window.fuzzyApi.openExplorerEntryWith({
+    targetPath: entry.path,
+    program,
+  });
+  toast(`${entry.name} opened in ${program}`, "success");
+}
+
+function buildExplorerCreateMenu(parentPath) {
+  return {
+    label: "New",
+    expanded: false,
+    children: [
+      {
+        label: "Word document",
+        action: async () => createExplorerEntry(parentPath, "word"),
+      },
+      {
+        label: "Excel workbook",
+        action: async () => createExplorerEntry(parentPath, "excel"),
+      },
+      {
+        label: "PowerPoint presentation",
+        action: async () => createExplorerEntry(parentPath, "powerpoint"),
+      },
+      {
+        label: "Text document",
+        action: async () => createExplorerEntry(parentPath, "text"),
+      },
+      {
+        label: "Folder",
+        action: async () => createExplorerEntry(parentPath, "folder"),
+      },
+    ],
+    action: async () => createExplorerEntry(parentPath, "folder"),
+  };
+}
+
+function buildExplorerOpenWithMenu(entry) {
+  return {
+    label: "Open with",
+    expanded: false,
+    children: [
+      {
+        label: "Word",
+        action: async () => openExplorerEntryWith(entry, "word"),
+      },
+      {
+        label: "Excel",
+        action: async () => openExplorerEntryWith(entry, "excel"),
+      },
+      {
+        label: "PowerPoint",
+        action: async () => openExplorerEntryWith(entry, "powerpoint"),
+      },
+      {
+        label: "VS Code",
+        action: async () => openExplorerEntryWith(entry, "vscode"),
+      },
+    ],
+    action: async () => openLocalFileInTab(entry.path, entry.name),
+  };
+}
+
+function isPlaceholderDownloadName(fileName) {
+  const normalized = String(fileName || "").trim().toLowerCase();
+  return !normalized || ["download", "view.php", "view.htm", "view.html"].includes(normalized);
 }
 
 async function duplicateExplorerEntry(entry) {
@@ -1146,6 +1272,14 @@ async function deleteExplorerEntry(entry) {
   toast(`${entry.name} を削除しました`, "success");
 }
 
+function openExplorerBackgroundMenu(x, y) {
+  const targetDir = state.currentDir || state.rootDir;
+  if (!targetDir) {
+    return;
+  }
+  showContextMenu([buildExplorerCreateMenu(targetDir)], x, y);
+}
+
 function openExplorerEntryMenu(entry, x, y) {
   const items = [];
   if (entry.isDirectory) {
@@ -1174,6 +1308,18 @@ function openExplorerEntryMenu(entry, x, y) {
       action: async () => deleteExplorerEntry(entry),
     });
   }
+  if (!entry.isDirectory) {
+    items.push(buildExplorerOpenWithMenu(entry));
+  }
+  if (entry.withinRoot !== false) {
+    items.unshift(buildExplorerCreateMenu(entry.isDirectory ? entry.path : (state.currentDir || state.rootDir)));
+    if (entry.isDirectory) {
+      items.push({
+        label: "VS Code",
+        action: async () => openExplorerEntryWith(entry, "vscode"),
+      });
+    }
+  }
   showContextMenu(items, x, y);
 }
 
@@ -1188,7 +1334,7 @@ function openMoodleFileMenu(payload, tab) {
   const saveToCourseFolder = async (customFileName = "") => {
     await saveRemoteFile(payload, tab, {
       folderPath: getDefaultFolder(),
-      fileName: customFileName || payload.fileName || payload.label || "download",
+      fileName: customFileName || payload.fileName || "",
     });
   };
 
@@ -1202,7 +1348,7 @@ function openMoodleFileMenu(payload, tab) {
       await configureSubmissionFolder(activeMapping, async (nextMapping) => {
         await saveRemoteFile(payload, tab, {
           folderPath: nextMapping.submissionFolderPath,
-          fileName: customFileName || payload.fileName || payload.label || "download",
+          fileName: customFileName || payload.fileName || "",
           lessonFolder: `第${lessonNumber}回`,
         });
       });
@@ -1210,7 +1356,7 @@ function openMoodleFileMenu(payload, tab) {
     }
     await saveRemoteFile(payload, tab, {
       folderPath: `${activeMapping.submissionFolderPath}\\第${lessonNumber}回`,
-      fileName: customFileName || payload.fileName || payload.label || "download",
+      fileName: customFileName || payload.fileName || "",
     });
   };
 
@@ -1242,14 +1388,12 @@ function openMoodleFileMenu(payload, tab) {
               await configureSubmissionFolder(activeMapping, async (nextMapping) => {
                 await showDownloadDialog(payload, tab, {
                   folderPath: `${nextMapping.submissionFolderPath}\\第${index + 1}回`,
-                  fileName: payload.fileName || payload.label || "download",
                 });
               });
               return;
             }
             await showDownloadDialog(payload, tab, {
               folderPath: `${activeMapping.submissionFolderPath}\\第${index + 1}回`,
-              fileName: payload.fileName || payload.label || "download",
             });
           },
         })),
@@ -1257,7 +1401,6 @@ function openMoodleFileMenu(payload, tab) {
       action: async () => {
         await showDownloadDialog(payload, tab, {
           folderPath: getDefaultFolder(),
-          fileName: payload.fileName || payload.label || "download",
         });
       },
     },
@@ -1350,6 +1493,7 @@ function renderDirectory(entries) {
   }
 
   for (const entry of entries) {
+    const icon = getExplorerFileIcon(entry);
     const row = document.createElement("button");
     row.type = "button";
     row.className = "file-row";
@@ -1364,13 +1508,19 @@ function renderDirectory(entries) {
       <span class="file-meta-text">${entry.isDirectory ? "-" : formatFileSize(entry.size)}</span>
     `;
 
+    const iconEl = row.querySelector(".file-icon");
+    if (iconEl) {
+      iconEl.textContent = icon.label;
+      iconEl.classList.add(...icon.classNames);
+    }
+
     row.addEventListener("click", async (event) => {
       if (entry.isDirectory) {
         await loadDirectory(entry.path, { syncBrowserFromDirectory: true });
         return;
       }
       event.preventDefault();
-      openExplorerEntryMenu(entry, event.clientX, event.clientY);
+      openLocalFileInTab(entry.path, entry.name);
     });
 
     row.addEventListener("contextmenu", (event) => {
@@ -1631,7 +1781,11 @@ async function showDownloadDialog(payload, tab, options = {}) {
     tabId: tab.id,
     sourceUrl: payload.url,
     url: resolved?.resolvedUrl || payload.url,
-    fileName: sanitizeFileName(options.fileName || resolved?.fileName || payload.fileName || payload.label || "download"),
+    fileName: sanitizeFileName(
+      !isPlaceholderDownloadName(options.fileName)
+        ? options.fileName
+        : resolved?.fileName || payload.label || "download"
+    ),
     folderPath: baseFolder,
     courseName: payload.courseName || tab.courseName || "",
     canPreview: Boolean(resolved?.canPreview),
@@ -1648,9 +1802,24 @@ function setupDashboardWebview() {
   elements.dashboardWebview.addEventListener("did-navigate-in-page", scheduleDashboardTimelinePull);
 }
 
+function absorbWheelEvent(event) {
+  event.stopPropagation();
+}
+
 function wireEvents() {
   elements.contextMenuBackdrop.addEventListener("mousedown", hideContextMenu);
   elements.contextMenuBackdrop.addEventListener("click", hideContextMenu);
+  elements.sidePanel.addEventListener("wheel", absorbWheelEvent, { passive: true });
+  elements.fileList.addEventListener("wheel", absorbWheelEvent, { passive: true });
+  elements.timelineList.addEventListener("wheel", absorbWheelEvent, { passive: true });
+  elements.fileList.addEventListener("contextmenu", (event) => {
+    if (closestFromEventTarget(event.target, ".file-row")) {
+      return;
+    }
+    event.preventDefault();
+    event.stopPropagation();
+    openExplorerBackgroundMenu(event.clientX, event.clientY);
+  });
   document.addEventListener("click", (event) => {
     if (!closestFromEventTarget(event.target, "#context-menu")) {
       hideContextMenu();
@@ -1662,7 +1831,11 @@ function wireEvents() {
     }
   });
   document.addEventListener("contextmenu", (event) => {
-    if (!closestFromEventTarget(event.target, ".file-row") && !closestFromEventTarget(event.target, "#context-menu")) {
+    if (
+      !closestFromEventTarget(event.target, ".file-row") &&
+      !closestFromEventTarget(event.target, "#context-menu") &&
+      !closestFromEventTarget(event.target, "#file-list")
+    ) {
       hideContextMenu();
     }
   });
@@ -1732,11 +1905,11 @@ function wireEvents() {
     }
   });
 
-  document.querySelector("#new-tab-button").addEventListener("click", () => {
+  document.querySelector("#new-tab-button")?.addEventListener("click", () => {
     createBrowserTab(state.moodleHome, UI_TEXT.defaultBrowserTitle);
   });
 
-  document.querySelector("#batch-download-button").addEventListener("click", async () => {
+  document.querySelector("#batch-download-button")?.addEventListener("click", async () => {
     const currentTab = getActiveTab();
     if (!currentTab || currentTab.kind !== "browser") {
       toast("一括ダウンロードは Moodle タブで使ってください", "warn");
@@ -1746,7 +1919,12 @@ function wireEvents() {
     toast(`${result.queued} 件のダウンロードを開始しました`, "success");
   });
 
-  document.querySelector("#refresh-directory-button").addEventListener("click", async () => {
+  document.querySelector("#panel-refresh-button").addEventListener("click", async () => {
+    if (state.activePanelTab === "timeline") {
+      ensureDashboardLoaded();
+      scheduleDashboardRefresh();
+      return;
+    }
     await loadDirectory(state.currentDir || state.rootDir, { syncBrowserFromDirectory: false });
   });
 
@@ -1762,7 +1940,7 @@ function wireEvents() {
     toast("保存ルートを更新しました", "success");
   }
 
-  document.querySelector("#choose-root-button").addEventListener("click", chooseRootDirectory);
+  document.querySelector("#choose-root-button")?.addEventListener("click", chooseRootDirectory);
   document.querySelector("#dialog-choose-root-button").addEventListener("click", chooseRootDirectory);
 
   document.querySelector("#open-settings-button").addEventListener("click", () => {
@@ -1852,11 +2030,6 @@ function wireEvents() {
       return;
     }
     await loadDirectory(mapping.submissionFolderPath, { syncBrowserFromDirectory: false });
-  });
-
-  document.querySelector("#timeline-refresh-button").addEventListener("click", () => {
-    ensureDashboardLoaded();
-    scheduleDashboardRefresh();
   });
 
   elements.downloadDialog.addEventListener("click", (event) => {
@@ -1958,7 +2131,9 @@ window.fuzzyApi.onOpenRemotePdf((payload) => {
 });
 
 window.fuzzyApi.onOpenPreviewFile((payload) => {
-  openLocalFileInTab(payload.localPath, payload.fileName || "download");
+  openLocalFileInTab(payload.localPath, payload.fileName || "download", {
+    cleanupOnClose: Boolean(payload.cleanupOnClose),
+  });
 });
 
 window.fuzzyApi.onDownloadPrompt(async (payload) => {
