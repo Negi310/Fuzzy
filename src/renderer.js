@@ -1198,19 +1198,10 @@ function openMoodleFileMenu(payload, tab) {
       toast("先にコースフォルダを紐づけてください", "warn");
       return;
     }
-    if (!activeMapping.submissionFolderPath) {
-      await configureSubmissionFolder(activeMapping, async (nextMapping) => {
-        await saveRemoteFile(payload, tab, {
-          folderPath: nextMapping.submissionFolderPath,
-          fileName: customFileName || payload.fileName || payload.label || "download",
-          lessonFolder: `第${lessonNumber}回`,
-        });
-      });
-      return;
-    }
     await saveRemoteFile(payload, tab, {
-      folderPath: `${activeMapping.submissionFolderPath}\\第${lessonNumber}回`,
+      folderPath: activeMapping.folderPath,
       fileName: customFileName || payload.fileName || payload.label || "download",
+      lessonFolder: `第${lessonNumber}回`,
     });
   };
 
@@ -1238,17 +1229,9 @@ function openMoodleFileMenu(payload, tab) {
               toast("先にコースフォルダを紐づけてください", "warn");
               return;
             }
-            if (!activeMapping.submissionFolderPath) {
-              await configureSubmissionFolder(activeMapping, async (nextMapping) => {
-                await showDownloadDialog(payload, tab, {
-                  folderPath: `${nextMapping.submissionFolderPath}\\第${index + 1}回`,
-                  fileName: payload.fileName || payload.label || "download",
-                });
-              });
-              return;
-            }
             await showDownloadDialog(payload, tab, {
-              folderPath: `${activeMapping.submissionFolderPath}\\第${index + 1}回`,
+              folderPath: activeMapping.folderPath,
+              lessonFolder: `第${index + 1}回`,
               fileName: payload.fileName || payload.label || "download",
             });
           },
@@ -1633,6 +1616,7 @@ async function showDownloadDialog(payload, tab, options = {}) {
     url: resolved?.resolvedUrl || payload.url,
     fileName: sanitizeFileName(options.fileName || resolved?.fileName || payload.fileName || payload.label || "download"),
     folderPath: baseFolder,
+    lessonFolder: options.lessonFolder || "",
     courseName: payload.courseName || tab.courseName || "",
     canPreview: Boolean(resolved?.canPreview),
   };
@@ -1887,6 +1871,7 @@ function wireEvents() {
       url: state.downloadDraft.url,
       folderPath: state.downloadDraft.folderPath,
       fileName: sanitizeFileName(elements.downloadFileNameInput.value),
+      lessonFolder: state.downloadDraft.lessonFolder || "",
     });
     elements.downloadDialog.close();
   });
