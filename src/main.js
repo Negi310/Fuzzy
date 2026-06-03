@@ -897,9 +897,25 @@ app.whenReady().then(() => {
       const targetFileName = shouldReplacePlaceholderFileName(customRequest.fileName)
         ? actualFileName
         : customRequest.fileName;
-      targetFolder = customRequest.folderPath;
+      targetFolder = customRequest.folderPath || resolved?.folderPath || "";
+      if (!targetFolder) {
+        customRequest.reject?.(new Error("保存先フォルダが見つかりませんでした。"));
+        sendToRenderer("download:event", {
+          type: "blocked",
+          message: "保存先フォルダが見つかりませんでした。",
+        });
+        return;
+      }
       if (customRequest.lessonFolder) {
         targetFolder = path.join(targetFolder, customRequest.lessonFolder);
+      }
+      if (!targetFolder) {
+        customRequest.reject?.(new Error("保存先フォルダが無効です。"));
+        sendToRenderer("download:event", {
+          type: "blocked",
+          message: "保存先フォルダが無効です。",
+        });
+        return;
       }
       ensureDirectory(targetFolder);
       finalPath = uniqueFilePath(path.join(targetFolder, sanitizeFileName(targetFileName)));
