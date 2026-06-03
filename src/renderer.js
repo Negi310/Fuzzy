@@ -1519,7 +1519,7 @@ function renderDirectory(entries) {
         return;
       }
       event.preventDefault();
-      openLocalFileInTab(entry.path, entry.name);
+      openExplorerEntrySmart(entry);
     });
 
     row.addEventListener("contextmenu", (event) => {
