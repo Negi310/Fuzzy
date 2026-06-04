@@ -19,6 +19,12 @@ const UI_TEXT = {
   rootUnset: "未設定",
 };
 
+const FAVORITE_LINKS = [
+  { label: "Moodle", url: () => state.moodleHome, title: UI_TEXT.defaultBrowserTitle },
+  { label: "Gemini", url: "https://gemini.google.com/app", title: "Gemini" },
+  { label: "NotebookLM", url: "https://notebooklm.google.com", title: "NotebookLM" },
+];
+
 const state = {
   moodleHome: "https://moodle2026.wakayama-u.ac.jp/2026/",
   dashboardUrl: "https://moodle2026.wakayama-u.ac.jp/2026/my/",
@@ -49,6 +55,8 @@ const elements = {
   activeCourseLabel: document.querySelector("#active-course-label"),
   currentDirLabel: document.querySelector("#current-dir-label"),
   rootDirLabel: document.querySelector("#root-dir-label"),
+  moodleHomeInput: document.querySelector("#moodle-home-input"),
+  saveMoodleHomeButton: document.querySelector("#save-moodle-home-button"),
   fileList: document.querySelector("#file-list"),
   mappingList: document.querySelector("#mapping-list"),
   timelineList: document.querySelector("#timeline-list"),
@@ -108,6 +116,14 @@ function normalizeUrl(input) {
   return `https://${raw}`;
 }
 
+function setMoodleHome(nextUrl) {
+  state.moodleHome = nextUrl;
+  state.dashboardUrl = new URL("./my/", nextUrl).toString();
+  if (elements.moodleHomeInput) {
+    elements.moodleHomeInput.value = nextUrl;
+  }
+}
+
 function sanitizeFolderName(name) {
   return String(name || "")
     .replace(/[<>:"/\\|?*\x00-\x1F]/g, " ")
@@ -125,6 +141,14 @@ function sanitizeFileName(name) {
 
 function normalizeCourseTitle(title) {
   return String(title || "")
+    .replace(/^\s*コース\s*[:：]\s*/iu, "")
+    .replace(/\s*[|｜]\s*【\s*和歌山大学\s*】\s*$/u, "")
+    .replace(/\s+/g, " ")
+    .replace(/\s*[|:-]\s*Wakayama.*Moodle.*$/i, "")
+    .replace(/\s*[|｜:-]\s*和歌山大学.*Moodle.*$/u, "")
+    .replace(/\s*Moodle\d*\s*$/i, "")
+    .trim();
+  return String(title || "")
     .replace(/^\s*コース\s*[:：]\s*/i, "")
     .replace(/\s*[|｜]\s*【?\s*和歌山大学\s*】?\s*$/i, "")
     .replace(/\s+/g, " ")
@@ -132,6 +156,21 @@ function normalizeCourseTitle(title) {
     .replace(/\s*[|:-]\s*和歌山大学.*Moodle.*$/i, "")
     .replace(/\s*Moodle\d*\s*$/i, "")
     .trim();
+}
+
+function normalizeCourseTitle(title) {
+  return String(title || "")
+    .replace(/^\s*\u30b3\u30fc\u30b9\s*[:\uFF1A]\s*/u, "")
+    .replace(/\s*(?:(?:\||\uFF5C)\s*)?\u3010\u548c\u6b4c\u5c71\u5927\u5b66\u3011\s*$/u, "")
+    .replace(/\s+/g, " ")
+    .replace(/\s*[|:-]\s*Wakayama.*Moodle.*$/i, "")
+    .replace(/\s*[|\uFF5C:\-]\s*\u548c\u6b4c\u5c71\u5927\u5b66.*Moodle.*$/u, "")
+    .replace(/\s*Moodle\d*\s*$/i, "")
+    .trim();
+}
+
+function getDisplayCourseName(courseName) {
+  return normalizeCourseTitle(courseName) || UI_TEXT.noCourse;
 }
 
 function deriveCourseNameFromTitle(title) {
@@ -264,6 +303,41 @@ function classifyMoodlePage(context) {
       title === "ダッシュボード" ||
       title === "ホーム" ||
       title === "マイコース"
+    ) {
+      return "generic";
+    }
+    if (pathname.endsWith("/course/view.php") && parsed.searchParams.get("id")) {
+      return "course";
+    }
+    return "other";
+  } catch (_error) {
+    return "outside";
+  }
+}
+
+function isMoodleHomePath(pathname) {
+  return pathname === "/" || /^\/\d{4}\/?$/i.test(pathname);
+}
+
+function classifyMoodlePage(context) {
+  try {
+    const parsed = new URL(context?.url || "");
+    if (!/moodle(?:\d{4})?\.wakayama-u\.ac\.jp$/i.test(parsed.hostname)) {
+      return "outside";
+    }
+
+    const pathname = parsed.pathname.toLowerCase();
+    const title = normalizeCourseTitle(context?.title || "").toLowerCase();
+    if (isMoodleHomePath(pathname)) {
+      return "home";
+    }
+    if (
+      pathname.endsWith("/my/") ||
+      pathname.endsWith("/my/index.php") ||
+      pathname.endsWith("/course/index.php") ||
+      title === "dashboard" ||
+      title === "home" ||
+      title === "my courses"
     ) {
       return "generic";
     }
@@ -555,6 +629,19 @@ function syncAddressBar() {
   elements.addressInput.value = activeTab?.url || activeTab?.path || "";
 }
 
+function focusBrowserSurface(tab) {
+  if (!tab?.webviewEl || tab.kind !== "browser") {
+    return;
+  }
+  setTimeout(() => {
+    try {
+      tab.webviewEl.focus();
+    } catch (_error) {
+      // Ignore transient focus failures while the webview is still mounting.
+    }
+  }, 0);
+}
+
 function createBrowserTab(url, title = UI_TEXT.defaultBrowserTitle) {
   const tab = {
     id: createId("browser"),
@@ -696,6 +783,27 @@ function isLoggedInMoodleHome(context) {
       path === "/2026/" ||
       path.endsWith("/my/") ||
       path.endsWith("/my/index.php") ||
+      title.includes("dashboard") ||
+      title.includes("home")
+    );
+  } catch (_error) {
+    return false;
+  }
+}
+
+function isLoggedInMoodleHome(context) {
+  try {
+    const parsed = new URL(context.url || "");
+    if (!/moodle(?:\d{4})?\.wakayama-u\.ac\.jp$/i.test(parsed.hostname)) {
+      return false;
+    }
+
+    const pathname = parsed.pathname.toLowerCase();
+    const title = normalizeCourseTitle(context.title || "").toLowerCase();
+    return (
+      isMoodleHomePath(pathname) ||
+      pathname.endsWith("/my/") ||
+      pathname.endsWith("/my/index.php") ||
       title.includes("dashboard") ||
       title.includes("home")
     );
@@ -928,10 +1036,9 @@ async function ensureCourseMapping(tab) {
   if (
     !tab?.courseName ||
     !shouldPromptForCourseMapping(tab) ||
-    findMappingForCourse(tab.courseName) ||
     state.mappingPromptedCourses.has(tab.courseName)
   ) {
-    return;
+    return null;
   }
 
   state.mappingPromptedCourses.add(tab.courseName);
@@ -949,7 +1056,7 @@ async function ensureCourseMapping(tab) {
 
   if (prepared.existing) {
     state.mappingPromptedCourses.delete(tab.courseName);
-    return;
+    return prepared.existing;
   }
 
   elements.mappingCourseLabel.textContent = `${tab.courseName} に対応するフォルダを選んでください。`;
@@ -972,6 +1079,7 @@ async function ensureCourseMapping(tab) {
 
   elements.mappingDialog.dataset.suggestedFolderPath = prepared.suggestedFolderPath;
   elements.mappingDialog.showModal();
+  return { needsPrompt: true };
 }
 
 function mountBrowserLikeTab(tab, usePreload = true) {
@@ -986,9 +1094,18 @@ function mountBrowserLikeTab(tab, usePreload = true) {
     webview.preload = PRELOAD_PATH;
   }
   webview.setAttribute("allowpopups", "true");
+  webview.addEventListener("mousedown", () => {
+    focusBrowserSurface(tab);
+  });
+  webview.addEventListener("click", () => {
+    focusBrowserSurface(tab);
+  });
 
   webview.addEventListener("did-finish-load", () => {
     syncTabFromWebview(tab);
+    if (tab.id === state.activeTabId) {
+      focusBrowserSurface(tab);
+    }
   });
 
   webview.addEventListener("did-navigate", () => {
@@ -1006,6 +1123,9 @@ function mountBrowserLikeTab(tab, usePreload = true) {
       tabId: tab.id,
       webContentsId,
     });
+    if (tab.id === state.activeTabId) {
+      focusBrowserSurface(tab);
+    }
   });
 
   webview.addEventListener("ipc-message", (event) => {
@@ -1047,7 +1167,7 @@ function mountBrowserLikeTab(tab, usePreload = true) {
     tab.url = payload.url || tab.url;
     tab.courseUrl = payload.url || tab.courseUrl || tab.url;
     tab.courseId = payload.courseId || extractCourseIdFromUrl(tab.url);
-    tab.courseName = pageType === "course" ? payload.courseName || "" : "";
+    tab.courseName = pageType === "course" ? normalizeCourseTitle(payload.courseName || "") : "";
     tab.title = tab.courseName || payload.title || tab.title;
 
     window.fuzzyApi.updateTabContext({
@@ -1085,7 +1205,7 @@ function syncTabFromWebview(tab) {
   tab.url = tab.webviewEl.getURL();
   const htmlTitle = tab.webviewEl.getTitle() || tab.title;
   const pageType = classifyMoodlePage({ url: tab.url, title: htmlTitle });
-  const courseName = pageType === "course" ? deriveCourseNameFromTitle(htmlTitle) : "";
+  const courseName = pageType === "course" ? normalizeCourseTitle(deriveCourseNameFromTitle(htmlTitle)) : "";
   tab.courseName = courseName;
   tab.courseId = extractCourseIdFromUrl(tab.url);
   tab.courseUrl = tab.url;
@@ -1186,8 +1306,16 @@ async function openExplorerEntryWith(entry, program) {
   toast(`${entry.name} opened in ${program}`, "success");
 }
 
+async function openExplorerExecutable(entry) {
+  await window.fuzzyApi.openExplorerExecutable(entry.path);
+  toast(`${entry.name} opened`, "success");
+}
+
 async function openExplorerEntrySmart(entry) {
   const ext = entry.name.split('.').pop().toLowerCase();
+  if (ext === "exe") {
+    return openExplorerExecutable(entry);
+  }
   if (["docx", "doc"].includes(ext)) {
     return openExplorerEntryWith(entry, "word");
   }
@@ -1465,19 +1593,24 @@ function activateTab(tabId) {
   }
   renderBrowserTabs();
   syncAddressBar();
+  focusBrowserSurface(getActiveTab());
   void updateCurrentCourse(getActiveTab());
 }
 
 async function updateCurrentCourse(tab) {
-  const courseName = shouldPromptForCourseMapping(tab) ? tab?.courseName || UI_TEXT.noCourse : UI_TEXT.noCourse;
+  const courseName = shouldPromptForCourseMapping(tab) ? getDisplayCourseName(tab?.courseName) : UI_TEXT.noCourse;
   elements.activeCourseLabel.textContent = courseName;
 
   if (tab?.courseName && shouldPromptForCourseMapping(tab)) {
-    const mapping = findMappingForTab(tab) || findMappingForCourse(tab.courseName);
+    const ensuredMapping = await ensureCourseMapping(tab);
+    if (ensuredMapping?.needsPrompt) {
+      renderSubmissionFolderButton();
+      renderTimeline();
+      return;
+    }
+    const mapping = ensuredMapping || findMappingForTab(tab) || findMappingForCourse(tab.courseName);
     if (mapping) {
       await loadDirectory(mapping.folderPath, { syncBrowserFromDirectory: false });
-    } else {
-      await ensureCourseMapping(tab);
     }
   }
 
@@ -1616,7 +1749,7 @@ async function loadDirectory(targetPath, options = {}) {
       if (mapping.courseUrl && activeTab?.courseUrl !== mapping.courseUrl) {
         navigateCurrentBrowserTab(mapping.courseUrl, mapping.courseName || UI_TEXT.defaultBrowserTitle);
       }
-      elements.activeCourseLabel.textContent = mapping.courseName || UI_TEXT.noCourse;
+      elements.activeCourseLabel.textContent = getDisplayCourseName(mapping.courseName);
     }
   }
 
@@ -1625,7 +1758,7 @@ async function loadDirectory(targetPath, options = {}) {
 
 async function saveMapping(courseName, folderPath, matchType, courseUrl) {
   const mapping = await window.fuzzyApi.saveMapping({
-    courseName,
+    courseName: normalizeCourseTitle(courseName),
     courseId: extractCourseIdFromUrl(courseUrl),
     folderPath,
     courseUrl,
@@ -1883,6 +2016,23 @@ function wireEvents() {
     }
   });
 
+  document.querySelector('[data-action="favorite"]')?.addEventListener("click", (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    const rect = event.currentTarget.getBoundingClientRect();
+    showContextMenu(
+      FAVORITE_LINKS.map((entry) => ({
+        label: entry.label,
+        action: async () => {
+          const url = typeof entry.url === "function" ? entry.url() : entry.url;
+          createBrowserTab(url, entry.title);
+        },
+      })),
+      rect.left,
+      rect.bottom + 8,
+    );
+  });
+
   elements.addressInput.addEventListener("keydown", (event) => {
     if (event.key !== "Enter") {
       return;
@@ -1951,6 +2101,18 @@ function wireEvents() {
     elements.settingsDialog.showModal();
   });
 
+  elements.saveMoodleHomeButton?.addEventListener("click", async () => {
+    try {
+      const preferences = await window.fuzzyApi.updatePreferences({
+        moodleHome: elements.moodleHomeInput.value,
+      });
+      setMoodleHome(preferences.moodleHome);
+      toast("Moodle URL を保存しました", "success");
+    } catch (error) {
+      toast(error.message, "error");
+    }
+  });
+
   document.querySelector("#mapping-create-folder").addEventListener("click", async () => {
     if (!state.pendingMappingCourse) {
       return;
@@ -1988,6 +2150,14 @@ function wireEvents() {
     } catch (error) {
       toast(error.message, "error");
     }
+  });
+
+  elements.mappingDialog.addEventListener("close", () => {
+    const pendingCourseName = state.pendingMappingCourse?.courseName;
+    if (pendingCourseName) {
+      state.mappingPromptedCourses.delete(pendingCourseName);
+    }
+    state.pendingMappingCourse = null;
   });
 
   elements.explorerTabButton.addEventListener("click", () => setPanelTab("explorer"));
@@ -2075,8 +2245,7 @@ function wireEvents() {
 
 async function initialize() {
   const defaults = await window.fuzzyApi.getDefaults();
-  state.moodleHome = defaults.moodleHome;
-  state.dashboardUrl = new URL("./my/", state.moodleHome).toString();
+  setMoodleHome(defaults.moodleHome);
   state.dashboardAutoload = Boolean(defaults.dashboardAutoload);
 
   const initial = await window.fuzzyApi.getState();

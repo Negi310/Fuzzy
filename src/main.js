@@ -20,6 +20,9 @@ const ALLOWED_HOST_PATTERNS = [
   /^moodle(?:\d{4})?\.wakayama-u\.ac\.jp$/i,
   /^wakayama-u\.ac\.jp$/i,
   /^www\.wakayama-u\.ac\.jp$/i,
+  /^gemini\.google\.com$/i,
+  /^notebooklm\.google\.com$/i,
+  /^accounts\.google\.com$/i,
   /^login\.microsoftonline\.com$/i,
   /^sts\.windows\.net$/i,
   /^aadcdn\.msauth\.net$/i,
@@ -294,6 +297,28 @@ function sanitizeFolderName(name) {
     .slice(0, 120) || "Unsorted";
 }
 
+function normalizeCourseFolderName(name) {
+  return String(name || "")
+    .replace(/^\s*コース\s*[:：]\s*/iu, "")
+    .replace(/\s*[|｜]\s*【\s*和歌山大学\s*】\s*$/u, "")
+    .replace(/\s+/g, " ")
+    .replace(/\s*[|:-]\s*Wakayama.*Moodle.*$/i, "")
+    .replace(/\s*[|｜:-]\s*和歌山大学.*Moodle.*$/u, "")
+    .replace(/\s*Moodle\d*\s*$/i, "")
+    .trim();
+}
+
+function normalizeCourseFolderName(name) {
+  return String(name || "")
+    .replace(/^\s*\u30b3\u30fc\u30b9\s*[:\uFF1A]\s*/u, "")
+    .replace(/\s*(?:(?:\||\uFF5C)\s*)?\u3010\u548c\u6b4c\u5c71\u5927\u5b66\u3011\s*$/u, "")
+    .replace(/\s+/g, " ")
+    .replace(/\s*[|:-]\s*Wakayama.*Moodle.*$/i, "")
+    .replace(/\s*[|\uFF5C:\-]\s*\u548c\u6b4c\u5c71\u5927\u5b66.*Moodle.*$/u, "")
+    .replace(/\s*Moodle\d*\s*$/i, "")
+    .trim();
+}
+
 function sanitizeFileName(name) {
   const parsed = path.parse(name || "download");
   const base = `${parsed.name || "download"}${parsed.ext || ""}`
@@ -379,6 +404,25 @@ function replacePathPrefix(targetPath, fromPrefix, toPrefix) {
   }
   const relativePath = path.relative(normalizedFrom, normalizedTarget);
   return path.join(toPrefix, relativePath);
+}
+
+function normalizeMoodleHomeUrl(input) {
+  const raw = String(input || "").trim();
+  if (!raw) {
+    return WAKAYAMA_MOODLE_HOME;
+  }
+
+  const candidate = /^https?:\/\//i.test(raw) ? raw : `https://${raw}`;
+  const parsed = new URL(candidate);
+  if (!/^moodle(?:\d{4})?\.wakayama-u\.ac\.jp$/i.test(parsed.hostname)) {
+    throw new Error("Moodle URL must use a wakayama-u.ac.jp Moodle host.");
+  }
+
+  parsed.hash = "";
+  if (!parsed.pathname.endsWith("/")) {
+    parsed.pathname = `${parsed.pathname}/`;
+  }
+  return parsed.toString();
 }
 
 function getWorkspaceRoots() {
@@ -718,11 +762,19 @@ function getFolderCandidates() {
     }));
 }
 
+function isUsableMapping(mapping) {
+  return Boolean(
+    mapping?.folderPath &&
+    fs.existsSync(mapping.folderPath) &&
+    fs.statSync(mapping.folderPath).isDirectory()
+  );
+}
+
 function prepareMapping(courseName) {
   const existing = store.findMapping({
     courseName,
   });
-  if (existing) {
+  if (isUsableMapping(existing)) {
     return {
       existing,
       suggestions: [],
@@ -741,7 +793,7 @@ function prepareMapping(courseName) {
   return {
     existing: null,
     suggestions,
-    suggestedFolderPath: path.join(getRootDir(), sanitizeFolderName(courseName)),
+    suggestedFolderPath: path.join(getRootDir(), sanitizeFolderName(normalizeCourseFolderName(courseName))),
   };
 }
 
@@ -750,12 +802,12 @@ function resolveMapping(courseName, courseUrl = "") {
     courseName,
     courseUrl,
   });
-  if (existing) {
+  if (isUsableMapping(existing)) {
     return { folderPath: existing.folderPath, matchType: existing.matchType || "manual", suggestions: [] };
   }
 
   const prepared = prepareMapping(courseName);
-  if (prepared.existing) {
+  if (isUsableMapping(prepared.existing)) {
     return { folderPath: prepared.existing.folderPath, matchType: prepared.existing.matchType || "manual", suggestions: [] };
   }
 
@@ -1195,7 +1247,7 @@ app.on("before-quit", (event) => {
 });
 
 ipcMain.handle("app:defaults", () => ({
-  moodleHome: WAKAYAMA_MOODLE_HOME,
+  moodleHome: normalizeMoodleHomeUrl(store.getState().preferences?.moodleHome || WAKAYAMA_MOODLE_HOME),
   dashboardAutoload: Boolean(store.getState().preferences?.dashboardAutoload),
 }));
 
@@ -1203,7 +1255,11 @@ ipcMain.handle("app:preferences:update", (_event, payload) => {
   if (typeof payload.dashboardAutoload === "boolean") {
     store.setPreference("dashboardAutoload", payload.dashboardAutoload);
   }
+  if (typeof payload.moodleHome === "string") {
+    store.setPreference("moodleHome", normalizeMoodleHomeUrl(payload.moodleHome));
+  }
   return {
+    moodleHome: normalizeMoodleHomeUrl(store.getState().preferences?.moodleHome || WAKAYAMA_MOODLE_HOME),
     dashboardAutoload: Boolean(store.getState().preferences?.dashboardAutoload),
   };
 });
@@ -1232,7 +1288,7 @@ ipcMain.handle("mapping:prepare", (_event, payload) => {
     courseUrl: payload.courseUrl || "",
     courseId: payload.courseId || "",
   });
-  if (existing) {
+  if (isUsableMapping(existing)) {
     return {
       existing,
       suggestions: [],
@@ -1280,7 +1336,7 @@ ipcMain.handle("mapping:save", (_event, payload) => {
 
 ipcMain.handle("mapping:create-default-folder", (_event, payload) => {
   const rootDir = getRootDir();
-  const folderPath = path.join(rootDir, sanitizeFolderName(payload.courseName || ""));
+  const folderPath = path.join(rootDir, sanitizeFolderName(normalizeCourseFolderName(payload.courseName || "")));
   ensureDirectory(folderPath);
   return store.upsertMapping({
     courseName: payload.courseName,

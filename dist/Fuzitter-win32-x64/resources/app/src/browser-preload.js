@@ -19,12 +19,12 @@ function extractCourseId(targetUrl) {
 }
 
 function normalizeTitle(title) {
-  return (title || "")
-    .replace(/^\s*コース\s*[:：]\s*/i, "")
-    .replace(/\s*[|｜]\s*【?\s*和歌山大学\s*】?\s*$/i, "")
+  return String(title || "")
+    .replace(/^\s*\u30b3\u30fc\u30b9\s*[:\uFF1A]\s*/u, "")
+    .replace(/\s*(?:(?:\||\uFF5C)\s*)?\u3010\u548c\u6b4c\u5c71\u5927\u5b66\u3011\s*$/u, "")
     .replace(/\s+/g, " ")
     .replace(/\s*[|:-]\s*Wakayama.*Moodle.*$/i, "")
-    .replace(/\s*[|:-]\s*和歌山大学.*Moodle.*$/i, "")
+    .replace(/\s*[|\uFF5C:\-]\s*\u548c\u6b4c\u5c71\u5927\u5b66.*Moodle.*$/u, "")
     .replace(/\s*Moodle\d*\s*$/i, "")
     .trim();
 }
@@ -38,6 +38,10 @@ function isWakayamaMoodlePage(targetUrl) {
   }
 }
 
+function isMoodleHomePath(pathname) {
+  return pathname === "/" || /^\/\d{4}\/?$/i.test(pathname);
+}
+
 function isGenericMoodlePage(targetUrl, title = "") {
   if (!isWakayamaMoodlePage(targetUrl)) {
     return false;
@@ -48,17 +52,13 @@ function isGenericMoodlePage(targetUrl, title = "") {
     const pathname = parsed.pathname.toLowerCase();
     const normalizedTitle = normalizeTitle(title).toLowerCase();
     return (
-      pathname === "/2026" ||
-      pathname === "/2026/" ||
+      isMoodleHomePath(pathname) ||
       pathname.endsWith("/my/") ||
       pathname.endsWith("/my/index.php") ||
       pathname.endsWith("/course/index.php") ||
       normalizedTitle === "dashboard" ||
       normalizedTitle === "home" ||
-      normalizedTitle === "my courses" ||
-      normalizedTitle === "ダッシュボード" ||
-      normalizedTitle === "ホーム" ||
-      normalizedTitle === "マイコース"
+      normalizedTitle === "my courses"
     );
   } catch (_error) {
     return false;
@@ -103,18 +103,7 @@ function deriveCourseName() {
   }
 
   const titleCandidate = normalizeTitle(document.title);
-  const genericTitles = new Set([
-    "",
-    "Dashboard",
-    "Home",
-    "Timeline",
-    "My courses",
-    "ダッシュボード",
-    "ホーム",
-    "タイムライン",
-    "マイコース",
-  ]);
-
+  const genericTitles = new Set(["", "Dashboard", "Home", "Timeline", "My courses"]);
   if (!genericTitles.has(titleCandidate)) {
     return titleCandidate;
   }
@@ -131,152 +120,23 @@ function readCourseContext() {
   });
 }
 
-function deriveTimelineItems() {
-  if (isGenericMoodlePage(location.href, document.title)) {
-    safeSendToHost("timeline-data", {
-      url: location.href,
-      title: document.title,
-      items: [],
-      refreshedAt: new Date().toISOString(),
-    });
-    return;
-  }
+const scheduleCourseContextUpdate = debounce(readCourseContext, 200);
 
-  const anchors = [
-    ...document.querySelectorAll("[data-region*='timeline'] a[href]"),
-    ...document.querySelectorAll(".block_timeline a[href]"),
-    ...document.querySelectorAll(".timeline a[href]"),
-    ...document.querySelectorAll("[data-block='timeline'] a[href]"),
-  ];
-
-  const seen = new Set();
-  const items = [];
-
-  for (const anchor of anchors) {
-    const href = anchor.href;
-    const label = (anchor.textContent || "").trim().replace(/\s+/g, " ");
-    if (!href || !label || seen.has(href)) {
-      continue;
-    }
-
-    const container = anchor.closest("li, article, .event, .list-group-item, .activity-item, tr, .timeline-event");
-    const nearbyText = (container?.textContent || "").replace(/\s+/g, " ").trim();
-    const courseName = nearbyText.replace(label, "").trim().slice(0, 120);
-
-    items.push({
-      id: `${href}::${label}`,
-      href,
-      title: label,
-      courseName,
-      courseId: extractCourseId(href),
-      rawText: nearbyText,
-    });
-    seen.add(href);
-  }
-
-  safeSendToHost("timeline-data", {
-    url: location.href,
-    title: document.title,
-    items,
-    refreshedAt: new Date().toISOString(),
-  });
-}
-
-function isDownloadLikeUrl(href) {
-  return (
-    /\.(pdf|docx?|pptx?|xlsx?|zip)(\?|$)/i.test(href) ||
-    /mod\/resource\/view\.php/i.test(href) ||
-    /pluginfile\.php/i.test(href)
-  );
-}
-
-function emitDownloadContext(event) {
-  const target = event.target instanceof Element ? event.target : null;
-  const anchor = target?.closest("a[href]");
-  if (!anchor || !isDownloadLikeUrl(anchor.href)) {
-    return;
-  }
-
-  const fileName = decodeURIComponent(anchor.href.split("/").at(-1)?.split("?")[0] || anchor.textContent?.trim() || "download");
-  safeSendToHost("download-context", {
-    url: anchor.href,
-    fileName,
-    label: (anchor.textContent || "").trim(),
-    courseName: deriveCourseName(),
-    courseId: extractCourseId(location.href),
-    title: document.title,
-  });
-}
-
-function interceptDownloadContextMenu(event) {
-  const target = event.target instanceof Element ? event.target : null;
-  const anchor = target?.closest("a[href]");
-  if (!anchor || !isDownloadLikeUrl(anchor.href)) {
-    safeSendToHost("hide-context-menu", {});
-    return;
-  }
-
-  event.preventDefault();
-  event.stopPropagation();
-  event.stopImmediatePropagation?.();
-  const fileName = decodeURIComponent(anchor.href.split("/").at(-1)?.split("?")[0] || anchor.textContent?.trim() || "download");
-  safeSendToHost("download-menu", {
-    url: anchor.href,
-    fileName,
-    label: (anchor.textContent || "").trim(),
-    courseName: deriveCourseName(),
-    courseId: extractCourseId(location.href),
-    title: document.title,
-    x: event.clientX,
-    y: event.clientY,
-  });
-}
-
-function notifyHostPointerDown(event) {
-  safeSendToHost("hide-context-menu", {});
-}
-
-function interceptDownloadClick(event) {
-  const target = event.target instanceof Element ? event.target : null;
-  const anchor = target?.closest("a[href]");
-  if (!anchor || !isDownloadLikeUrl(anchor.href)) {
-    return;
-  }
-
-  event.preventDefault();
-  event.stopPropagation();
-  event.stopImmediatePropagation?.();
-  emitDownloadContext(event);
-}
-
-const emitAll = debounce(() => {
-  try {
-    readCourseContext();
-    deriveTimelineItems();
-  } catch (_error) {
-    // Avoid breaking Moodle pages when selectors or DOM states differ.
-  }
-}, 250);
-
-window.addEventListener("DOMContentLoaded", emitAll);
-window.addEventListener("load", emitAll);
-window.addEventListener("focus", emitAll);
-window.addEventListener("click", interceptDownloadClick, true);
-window.addEventListener("mousedown", notifyHostPointerDown, true);
-window.addEventListener("contextmenu", interceptDownloadContextMenu, true);
-
-const observer = new MutationObserver(emitAll);
 window.addEventListener("DOMContentLoaded", () => {
-  if (isGenericMoodlePage(location.href, document.title)) {
-    return;
-  }
-  if (!document.documentElement) {
-    return;
-  }
+  readCourseContext();
 
+  const observer = new MutationObserver(scheduleCourseContextUpdate);
   observer.observe(document.documentElement, {
     childList: true,
     subtree: true,
     characterData: true,
   });
+
+  document.addEventListener("click", () => {
+    setTimeout(readCourseContext, 80);
+  }, true);
 });
+
+window.addEventListener("load", readCourseContext);
+window.addEventListener("hashchange", readCourseContext);
+window.addEventListener("popstate", readCourseContext);

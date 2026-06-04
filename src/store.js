@@ -3,11 +3,11 @@ const path = require("node:path");
 
 function normalizeCourseName(name) {
   return String(name || "")
-    .replace(/^\s*コース\s*[:：]\s*/i, "")
-    .replace(/\s*[|｜]\s*【?\s*和歌山大学\s*】?\s*$/i, "")
+    .replace(/^\s*\u30b3\u30fc\u30b9\s*[:\uFF1A]\s*/u, "")
+    .replace(/\s*(?:(?:\||\uFF5C)\s*)?\u3010\u548c\u6b4c\u5c71\u5927\u5b66\u3011\s*$/u, "")
     .replace(/\s+/g, " ")
     .replace(/\s*[|:-]\s*Wakayama.*Moodle.*$/i, "")
-    .replace(/\s*[|:-]\s*和歌山大学.*Moodle.*$/i, "")
+    .replace(/\s*[|\uFF5C:\-]\s*\u548c\u6b4c\u5c71\u5927\u5b66.*Moodle.*$/u, "")
     .replace(/\s*Moodle\d*\s*$/i, "")
     .trim();
 }
