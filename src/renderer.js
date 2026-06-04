@@ -7,6 +7,8 @@ const PRELOAD_PATH = (() => {
   return pathname;
 })();
 
+const WEBVIEW_PARTITION = "persist:fuzitter";
+
 const UI_TEXT = {
   defaultBrowserTitle: "Moodle",
   noCourse: "未選択",
@@ -123,6 +125,8 @@ function sanitizeFileName(name) {
 
 function normalizeCourseTitle(title) {
   return String(title || "")
+    .replace(/^\s*コース\s*[:：]\s*/i, "")
+    .replace(/\s*[|｜]\s*【?\s*和歌山大学\s*】?\s*$/i, "")
     .replace(/\s+/g, " ")
     .replace(/\s*[|:-]\s*Wakayama.*Moodle.*$/i, "")
     .replace(/\s*[|:-]\s*和歌山大学.*Moodle.*$/i, "")
@@ -977,7 +981,7 @@ function mountBrowserLikeTab(tab, usePreload = true) {
   const webview = document.createElement("webview");
   webview.className = "browser-view";
   webview.src = tab.url;
-  webview.partition = "persist:fuzzy";
+  webview.partition = WEBVIEW_PARTITION;
   if (usePreload) {
     webview.preload = PRELOAD_PATH;
   }

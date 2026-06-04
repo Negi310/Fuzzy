@@ -20,6 +20,8 @@ function extractCourseId(targetUrl) {
 
 function normalizeTitle(title) {
   return (title || "")
+    .replace(/^\s*コース\s*[:：]\s*/i, "")
+    .replace(/\s*[|｜]\s*【?\s*和歌山大学\s*】?\s*$/i, "")
     .replace(/\s+/g, " ")
     .replace(/\s*[|:-]\s*Wakayama.*Moodle.*$/i, "")
     .replace(/\s*[|:-]\s*和歌山大学.*Moodle.*$/i, "")
