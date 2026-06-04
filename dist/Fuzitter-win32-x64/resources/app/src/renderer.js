@@ -7,6 +7,8 @@ const PRELOAD_PATH = (() => {
   return pathname;
 })();
 
+const WEBVIEW_PARTITION = "persist:fuzitter";
+
 const UI_TEXT = {
   defaultBrowserTitle: "Moodle",
   noCourse: "未選択",
@@ -123,6 +125,8 @@ function sanitizeFileName(name) {
 
 function normalizeCourseTitle(title) {
   return String(title || "")
+    .replace(/^\s*コース\s*[:：]\s*/i, "")
+    .replace(/\s*[|｜]\s*【?\s*和歌山大学\s*】?\s*$/i, "")
     .replace(/\s+/g, " ")
     .replace(/\s*[|:-]\s*Wakayama.*Moodle.*$/i, "")
     .replace(/\s*[|:-]\s*和歌山大学.*Moodle.*$/i, "")
@@ -977,7 +981,7 @@ function mountBrowserLikeTab(tab, usePreload = true) {
   const webview = document.createElement("webview");
   webview.className = "browser-view";
   webview.src = tab.url;
-  webview.partition = "persist:fuzzy";
+  webview.partition = WEBVIEW_PARTITION;
   if (usePreload) {
     webview.preload = PRELOAD_PATH;
   }
@@ -1182,6 +1186,26 @@ async function openExplorerEntryWith(entry, program) {
   toast(`${entry.name} opened in ${program}`, "success");
 }
 
+async function openExplorerEntrySmart(entry) {
+  const ext = entry.name.split('.').pop().toLowerCase();
+  if (["docx", "doc"].includes(ext)) {
+    return openExplorerEntryWith(entry, "word");
+  }
+  if (["xlsx", "xls"].includes(ext)) {
+    return openExplorerEntryWith(entry, "excel");
+  }
+  if (["pptx", "ppt"].includes(ext)) {
+    return openExplorerEntryWith(entry, "powerpoint");
+  }
+  if (["pdf"].includes(ext)) {
+    return openLocalFileInTab(entry.path, entry.name);
+  }
+  if (["txt", "md", "js", "json", "html", "css", "py", "java", "c", "cpp"].includes(ext)) {
+    return openExplorerEntryWith(entry, "vscode");
+  }
+  return openLocalFileInTab(entry.path, entry.name);
+}
+
 function buildExplorerCreateMenu(parentPath) {
   return {
     label: "New",
@@ -1214,7 +1238,7 @@ function buildExplorerCreateMenu(parentPath) {
 
 function buildExplorerOpenWithMenu(entry) {
   return {
-    label: "Open with",
+    label: "別タブで開く",
     expanded: false,
     children: [
       {
@@ -1234,7 +1258,7 @@ function buildExplorerOpenWithMenu(entry) {
         action: async () => openExplorerEntryWith(entry, "vscode"),
       },
     ],
-    action: async () => openLocalFileInTab(entry.path, entry.name),
+    action: async () => openExplorerEntrySmart(entry),
   };
 }
 
@@ -1286,11 +1310,6 @@ function openExplorerEntryMenu(entry, x, y) {
     items.push({
       label: "開く",
       action: () => loadDirectory(entry.path, { syncBrowserFromDirectory: true }),
-    });
-  } else {
-    items.push({
-      label: "別タブで開く",
-      action: async () => openLocalFileInTab(entry.path, entry.name),
     });
   }
   if (entry.withinRoot !== false) {
@@ -1344,19 +1363,10 @@ function openMoodleFileMenu(payload, tab) {
       toast("先にコースフォルダを紐づけてください", "warn");
       return;
     }
-    if (!activeMapping.submissionFolderPath) {
-      await configureSubmissionFolder(activeMapping, async (nextMapping) => {
-        await saveRemoteFile(payload, tab, {
-          folderPath: nextMapping.submissionFolderPath,
-          fileName: customFileName || payload.fileName || "",
-          lessonFolder: `第${lessonNumber}回`,
-        });
-      });
-      return;
-    }
     await saveRemoteFile(payload, tab, {
-      folderPath: `${activeMapping.submissionFolderPath}\\第${lessonNumber}回`,
+      folderPath: activeMapping.folderPath,
       fileName: customFileName || payload.fileName || "",
+      lessonFolder: `第${lessonNumber}回`,
     });
   };
 
@@ -1384,16 +1394,9 @@ function openMoodleFileMenu(payload, tab) {
               toast("先にコースフォルダを紐づけてください", "warn");
               return;
             }
-            if (!activeMapping.submissionFolderPath) {
-              await configureSubmissionFolder(activeMapping, async (nextMapping) => {
-                await showDownloadDialog(payload, tab, {
-                  folderPath: `${nextMapping.submissionFolderPath}\\第${index + 1}回`,
-                });
-              });
-              return;
-            }
             await showDownloadDialog(payload, tab, {
-              folderPath: `${activeMapping.submissionFolderPath}\\第${index + 1}回`,
+              folderPath: activeMapping.folderPath,
+              lessonFolder: `第${index + 1}回`,
             });
           },
         })),
@@ -1520,7 +1523,7 @@ function renderDirectory(entries) {
         return;
       }
       event.preventDefault();
-      openLocalFileInTab(entry.path, entry.name);
+      openExplorerEntrySmart(entry);
     });
 
     row.addEventListener("contextmenu", (event) => {
@@ -1787,6 +1790,7 @@ async function showDownloadDialog(payload, tab, options = {}) {
         : resolved?.fileName || payload.label || "download"
     ),
     folderPath: baseFolder,
+    lessonFolder: options.lessonFolder || "",
     courseName: payload.courseName || tab.courseName || "",
     canPreview: Boolean(resolved?.canPreview),
   };
@@ -2060,6 +2064,7 @@ function wireEvents() {
       url: state.downloadDraft.url,
       folderPath: state.downloadDraft.folderPath,
       fileName: sanitizeFileName(elements.downloadFileNameInput.value),
+      lessonFolder: state.downloadDraft.lessonFolder || "",
     });
     elements.downloadDialog.close();
   });

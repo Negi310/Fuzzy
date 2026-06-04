@@ -73,7 +73,9 @@ function diceCoefficient(a, b) {
 }
 
 function normalizeCourseName(name) {
-  return name
+  return String(name || "")
+    .replace(/^\s*コース\s*[:：]\s*/i, " ")
+    .replace(/\s*[|｜]\s*【?\s*和歌山大学\s*】?\s*$/i, " ")
     .replace(/\[[^\]]+\]/g, " ")
     .replace(/\([^)]+\)/g, " ")
     .replace(/[【】]/g, " ")

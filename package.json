@@ -1,12 +1,12 @@
 {
-  "name": "fuzzy",
+  "name": "fuzitter",
   "version": "0.1.0",
   "description": "Moodle-integrated desktop workspace for local file organization",
   "main": "src/main.js",
   "scripts": {
     "start": "electron .",
     "test": "node --test",
-    "build": "electron-packager . Fuzzy --platform=win32 --arch=x64 --out=dist --overwrite"
+    "build": "electron-packager . Fuzitter --platform=win32 --arch=x64 --out=dist --overwrite --icon=assets/fuzitter.ico --ignore=tmp_i2_review"
   },
   "devDependencies": {
     "@electron/packager": "^18.4.4",

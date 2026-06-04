@@ -8,8 +8,13 @@ const { app, BrowserWindow, dialog, ipcMain, nativeImage, session, shell, webCon
 const { rankCandidates } = require("./similarity");
 const { Store } = require("./store");
 
+const APP_NAME = "Fuzitter";
 const WAKAYAMA_MOODLE_HOME = "https://moodle2026.wakayama-u.ac.jp/2026/";
-const FUZZY_PARTITION = "persist:fuzzy";
+const FUZITTER_PARTITION = "persist:fuzitter";
+const LEGACY_ROOT_DIR_NAME = "Fuzzy";
+const ROOT_DIR_NAME = "Fuzitter";
+const LEGACY_STORE_FILE_NAME = "fuzzy-store.json";
+const STORE_FILE_NAME = "fuzitter-store.json";
 const ALLOWED_HOST_PATTERNS = [
   /^moodle(?:\d{4})?\.wakayama-u\.ac\.jp$/i,
   /^wakayama-u\.ac\.jp$/i,
@@ -335,6 +340,143 @@ function buildDuplicatePath(targetPath) {
   }
 }
 
+function getDefaultRootDir() {
+  return path.join(app.getPath("downloads"), ROOT_DIR_NAME);
+}
+
+function getStoreFilePath() {
+  return path.join(app.getPath("userData"), STORE_FILE_NAME);
+}
+
+function cloneStoreState(state = {}) {
+  return {
+    rootDir: state.rootDir || "",
+    mappings: Array.isArray(state.mappings) ? state.mappings.map((entry) => ({ ...entry })) : [],
+    downloadHistory: Array.isArray(state.downloadHistory) ? state.downloadHistory.map((entry) => ({ ...entry })) : [],
+    preferences: state.preferences && typeof state.preferences === "object"
+      ? { ...state.preferences }
+      : { dashboardAutoload: false },
+  };
+}
+
+function scoreStoreState(state = {}) {
+  return (
+    (Array.isArray(state.mappings) ? state.mappings.length : 0) * 100 +
+    (Array.isArray(state.downloadHistory) ? state.downloadHistory.length : 0) * 2 +
+    (state.rootDir ? 20 : 0)
+  );
+}
+
+function replacePathPrefix(targetPath, fromPrefix, toPrefix) {
+  if (!targetPath || !fromPrefix || !toPrefix) {
+    return targetPath || "";
+  }
+  const normalizedTarget = path.resolve(targetPath);
+  const normalizedFrom = path.resolve(fromPrefix);
+  if (!isSubPath(normalizedFrom, normalizedTarget)) {
+    return targetPath;
+  }
+  const relativePath = path.relative(normalizedFrom, normalizedTarget);
+  return path.join(toPrefix, relativePath);
+}
+
+function updateStorePaths(state, fromRootDir, toRootDir) {
+  const nextState = cloneStoreState(state);
+  if (nextState.rootDir) {
+    nextState.rootDir = replacePathPrefix(nextState.rootDir, fromRootDir, toRootDir);
+  }
+  nextState.mappings = nextState.mappings.map((entry) => ({
+    ...entry,
+    folderPath: replacePathPrefix(entry.folderPath, fromRootDir, toRootDir),
+    submissionFolderPath: replacePathPrefix(entry.submissionFolderPath, fromRootDir, toRootDir),
+  }));
+  nextState.downloadHistory = nextState.downloadHistory.map((entry) => ({
+    ...entry,
+    filePath: replacePathPrefix(entry.filePath, fromRootDir, toRootDir),
+  }));
+  return nextState;
+}
+
+function getLegacyUserDataDirs() {
+  return [
+    path.join(app.getPath("appData"), "fuzzy"),
+    path.join(app.getPath("appData"), LEGACY_ROOT_DIR_NAME),
+  ].filter((value, index, array) => array.indexOf(value) === index);
+}
+
+function getStoreCandidatePaths() {
+  const preferredUserDataDir = app.getPath("userData");
+  const preferredStorePath = path.join(preferredUserDataDir, STORE_FILE_NAME);
+  const legacyPaths = [
+    path.join(preferredUserDataDir, LEGACY_STORE_FILE_NAME),
+    ...getLegacyUserDataDirs().flatMap((dirPath) => [
+      path.join(dirPath, STORE_FILE_NAME),
+      path.join(dirPath, LEGACY_STORE_FILE_NAME),
+    ]),
+  ];
+  return [preferredStorePath, ...legacyPaths]
+    .filter((value, index, array) => array.indexOf(value) === index);
+}
+
+function loadStoreSnapshot(filePath) {
+  if (!filePath || !fs.existsSync(filePath)) {
+    return null;
+  }
+
+  try {
+    const raw = fs.readFileSync(filePath, "utf8");
+    const parsed = JSON.parse(raw);
+    return {
+      filePath,
+      state: cloneStoreState(parsed),
+    };
+  } catch (_error) {
+    return null;
+  }
+}
+
+function selectBestStoreSnapshot(snapshots = []) {
+  const available = snapshots.filter(Boolean);
+  if (!available.length) {
+    return null;
+  }
+
+  return available.sort((left, right) => (
+    scoreStoreState(right.state) - scoreStoreState(left.state)
+  ))[0];
+}
+
+function migrateLegacyStateToFuzitter() {
+  const preferredRootDir = path.join(app.getPath("downloads"), ROOT_DIR_NAME);
+  const legacyRootDir = path.join(app.getPath("downloads"), LEGACY_ROOT_DIR_NAME);
+  if (!fs.existsSync(preferredRootDir) && fs.existsSync(legacyRootDir)) {
+    fs.renameSync(legacyRootDir, preferredRootDir);
+  }
+
+  const preferredStorePath = getStoreFilePath();
+  const snapshots = getStoreCandidatePaths()
+    .map((candidatePath) => loadStoreSnapshot(candidatePath));
+  const bestSnapshot = selectBestStoreSnapshot(snapshots);
+
+  const nextState = bestSnapshot
+    ? updateStorePaths(bestSnapshot.state, legacyRootDir, preferredRootDir)
+    : cloneStoreState();
+
+  if (!nextState.rootDir) {
+    nextState.rootDir = preferredRootDir;
+  } else {
+    nextState.rootDir = replacePathPrefix(nextState.rootDir, legacyRootDir, preferredRootDir);
+  }
+
+  ensureDirectory(path.dirname(preferredStorePath));
+  fs.writeFileSync(preferredStorePath, JSON.stringify(nextState, null, 2), "utf8");
+
+  const currentLegacyStorePath = path.join(app.getPath("userData"), LEGACY_STORE_FILE_NAME);
+  if (currentLegacyStorePath !== preferredStorePath && fs.existsSync(currentLegacyStorePath)) {
+    fs.rmSync(currentLegacyStorePath, { force: true });
+  }
+}
+
 function buildUniqueNamedPath(parentPath, baseName, extension = "") {
   const safeBaseName = sanitizeFileName(baseName).replace(/\.[^.]+$/, "") || "New File";
   const safeExtension = extension || "";
@@ -509,7 +651,7 @@ function openExplorerEntryWithProgram(targetPath, programKey) {
 
 function getRootDir() {
   const state = store.getState();
-  return state.rootDir || path.join(app.getPath("downloads"), "Fuzzy");
+  return state.rootDir || getDefaultRootDir();
 }
 
 function getFolderCandidates() {
@@ -734,7 +876,9 @@ function createWindow() {
     height: 960,
     minWidth: 1280,
     minHeight: 760,
+    title: "Fuzitter",
     backgroundColor: "#0b1020",
+    icon: path.join(__dirname, "..", "assets", "fuzitter.ico"),
     webPreferences: {
       preload: path.join(__dirname, "preload.js"),
       contextIsolation: true,
@@ -773,8 +917,13 @@ function shiftCustomDownload(tabId) {
 }
 
 app.whenReady().then(() => {
-  store = new Store(path.join(app.getPath("userData"), "fuzzy-store.json"));
-  fuzzySession = session.fromPartition(FUZZY_PARTITION);
+  app.setName(APP_NAME);
+  if (typeof app.setAppUserModelId === "function") {
+    app.setAppUserModelId("Fuzitter");
+  }
+  migrateLegacyStateToFuzitter();
+  store = new Store(getStoreFilePath());
+  fuzzySession = session.fromPartition(FUZITTER_PARTITION);
   createWindow();
 
   app.on("web-contents-created", (_appEvent, contents) => {
