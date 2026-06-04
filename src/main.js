@@ -13,6 +13,7 @@ const WAKAYAMA_MOODLE_HOME = "https://moodle2026.wakayama-u.ac.jp/2026/";
 const FUZITTER_PARTITION = "persist:fuzitter";
 const LEGACY_ROOT_DIR_NAME = "Fuzzy";
 const ROOT_DIR_NAME = "Fuzitter";
+const BUILD_OUTPUT_DIR_NAME = "Fuzitter-win32-x64";
 const LEGACY_STORE_FILE_NAME = "fuzzy-store.json";
 const STORE_FILE_NAME = "fuzitter-store.json";
 const ALLOWED_HOST_PATTERNS = [
@@ -380,6 +381,45 @@ function replacePathPrefix(targetPath, fromPrefix, toPrefix) {
   return path.join(toPrefix, relativePath);
 }
 
+function getWorkspaceRoots() {
+  return [process.cwd(), app.getAppPath()]
+    .map((root) => path.resolve(root || ""))
+    .filter((root, index, array) => root && array.indexOf(root) === index);
+}
+
+function resolveLocalBuildMirrorPath(targetPath) {
+  const resolvedTargetPath = path.resolve(String(targetPath || ""));
+  for (const workspaceRoot of getWorkspaceRoots()) {
+    const distRoot = path.join(workspaceRoot, "dist", BUILD_OUTPUT_DIR_NAME);
+    const localDistRoot = path.join(workspaceRoot, "local-dist", BUILD_OUTPUT_DIR_NAME);
+    if (!fs.existsSync(localDistRoot) || !isSubPath(distRoot, resolvedTargetPath)) {
+      continue;
+    }
+
+    const relativePath = path.relative(distRoot, resolvedTargetPath);
+    const mirroredPath = path.join(localDistRoot, relativePath);
+    if (fs.existsSync(mirroredPath)) {
+      return mirroredPath;
+    }
+  }
+
+  return resolvedTargetPath;
+}
+
+function isBuildOutputPath(targetPath) {
+  const resolvedTargetPath = path.resolve(String(targetPath || ""));
+  return getWorkspaceRoots().some((workspaceRoot) => {
+    const distRoot = path.join(workspaceRoot, "dist", BUILD_OUTPUT_DIR_NAME);
+    const localDistRoot = path.join(workspaceRoot, "local-dist", BUILD_OUTPUT_DIR_NAME);
+    return isSubPath(distRoot, resolvedTargetPath) || isSubPath(localDistRoot, resolvedTargetPath);
+  });
+}
+
+function isAllowedExplorerTargetPath(targetPath) {
+  const resolvedTargetPath = path.resolve(String(targetPath || ""));
+  return isSubPath(getRootDir(), resolvedTargetPath) || isBuildOutputPath(resolvedTargetPath);
+}
+
 function updateStorePaths(state, fromRootDir, toRootDir) {
   const nextState = cloneStoreState(state);
   if (nextState.rootDir) {
@@ -635,8 +675,8 @@ function createExplorerEntry(parentPath, entryKind) {
 }
 
 function openExplorerEntryWithProgram(targetPath, programKey) {
-  const rootDir = getRootDir();
-  if (!targetPath || !isSubPath(rootDir, targetPath) || !fs.existsSync(targetPath)) {
+  const resolvedTargetPath = resolveLocalBuildMirrorPath(targetPath);
+  if (!resolvedTargetPath || !isAllowedExplorerTargetPath(resolvedTargetPath) || !fs.existsSync(resolvedTargetPath)) {
     throw new Error("Target file is not available.");
   }
 
@@ -645,8 +685,18 @@ function openExplorerEntryWithProgram(targetPath, programKey) {
     throw new Error(`${programKey} is not installed on this PC.`);
   }
 
-  launchProgram(programPath, [targetPath]);
+  launchProgram(programPath, [resolvedTargetPath]);
   return { ok: true, programPath };
+}
+
+function openExplorerExecutable(targetPath) {
+  const resolvedTargetPath = resolveLocalBuildMirrorPath(targetPath);
+  if (!resolvedTargetPath || !isAllowedExplorerTargetPath(resolvedTargetPath) || !fs.existsSync(resolvedTargetPath)) {
+    throw new Error("Target executable is not available.");
+  }
+
+  launchProgram(resolvedTargetPath, []);
+  return { ok: true, path: resolvedTargetPath };
 }
 
 function getRootDir() {
@@ -735,7 +785,10 @@ function listDirectory(targetPath) {
   const rootDir = getRootDir();
   ensureDirectory(rootDir);
   const requestedPath = path.resolve(targetPath || rootDir);
-  const safeTarget = fs.existsSync(requestedPath) && fs.statSync(requestedPath).isDirectory()
+  const mirroredPath = resolveLocalBuildMirrorPath(requestedPath);
+  const safeTarget = fs.existsSync(mirroredPath) && fs.statSync(mirroredPath).isDirectory()
+    ? mirroredPath
+    : fs.existsSync(requestedPath) && fs.statSync(requestedPath).isDirectory()
     ? requestedPath
     : rootDir;
   const entries = fs.readdirSync(safeTarget, { withFileTypes: true })
@@ -1372,6 +1425,10 @@ ipcMain.handle("explorer:create", async (_event, payload) => {
 
 ipcMain.handle("explorer:open-with", async (_event, payload) => {
   return openExplorerEntryWithProgram(payload?.targetPath, String(payload?.program || "").toLowerCase());
+});
+
+ipcMain.handle("explorer:open-executable", async (_event, targetPath) => {
+  return openExplorerExecutable(targetPath);
 });
 
 ipcMain.handle("explorer:rename", async (_event, payload) => {

@@ -1186,8 +1186,16 @@ async function openExplorerEntryWith(entry, program) {
   toast(`${entry.name} opened in ${program}`, "success");
 }
 
+async function openExplorerExecutable(entry) {
+  await window.fuzzyApi.openExplorerExecutable(entry.path);
+  toast(`${entry.name} opened`, "success");
+}
+
 async function openExplorerEntrySmart(entry) {
   const ext = entry.name.split('.').pop().toLowerCase();
+  if (ext === "exe") {
+    return openExplorerExecutable(entry);
+  }
   if (["docx", "doc"].includes(ext)) {
     return openExplorerEntryWith(entry, "word");
   }
