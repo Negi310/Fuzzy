@@ -30,6 +30,7 @@ contextBridge.exposeInMainWorld("fuzzyApi", {
   deleteExplorerEntry: (targetPath) => ipcRenderer.invoke("explorer:delete", targetPath),
   onDownloadEvent: (handler) => ipcRenderer.on("download:event", (_event, payload) => handler(payload)),
   onDownloadPrompt: (handler) => ipcRenderer.on("download:prompt", (_event, payload) => handler(payload)),
+  onLinkMenu: (handler) => ipcRenderer.on("link:menu", (_event, payload) => handler(payload)),
   onOpenCourseTab: (handler) => ipcRenderer.on("course:open-tab", (_event, payload) => handler(payload)),
   onOpenRemotePdf: (handler) => ipcRenderer.on("pdf:open-remote", (_event, payload) => handler(payload)),
   onOpenRemoteFile: (handler) => ipcRenderer.on("file:open-remote", (_event, payload) => handler(payload)),

@@ -38,6 +38,13 @@ const tabRegistry = new Map();
 const webContentsToTab = new Map();
 const customDownloadQueues = new Map();
 
+process.on("uncaughtException", (error) => {
+  if (error?.code === "EPIPE") {
+    return;
+  }
+  throw error;
+});
+
 function isAllowedUrl(targetUrl) {
   try {
     const parsed = new URL(targetUrl);
@@ -533,8 +540,19 @@ function selectBestStoreSnapshot(snapshots = []) {
 function migrateLegacyStateToFuzitter() {
   const preferredRootDir = path.join(app.getPath("downloads"), ROOT_DIR_NAME);
   const legacyRootDir = path.join(app.getPath("downloads"), LEGACY_ROOT_DIR_NAME);
+  let activeRootDir = preferredRootDir;
+  let migratedLegacyRoot = false;
+
   if (!fs.existsSync(preferredRootDir) && fs.existsSync(legacyRootDir)) {
-    fs.renameSync(legacyRootDir, preferredRootDir);
+    try {
+      fs.renameSync(legacyRootDir, preferredRootDir);
+      migratedLegacyRoot = true;
+    } catch (_error) {
+      // Keep using the legacy downloads folder when Windows blocks the rename.
+      activeRootDir = legacyRootDir;
+    }
+  } else if (fs.existsSync(legacyRootDir) && !fs.existsSync(preferredRootDir)) {
+    activeRootDir = legacyRootDir;
   }
 
   const preferredStorePath = getStoreFilePath();
@@ -543,13 +561,17 @@ function migrateLegacyStateToFuzitter() {
   const bestSnapshot = selectBestStoreSnapshot(snapshots);
 
   const nextState = bestSnapshot
-    ? updateStorePaths(bestSnapshot.state, legacyRootDir, preferredRootDir)
+    ? migratedLegacyRoot
+      ? updateStorePaths(bestSnapshot.state, legacyRootDir, preferredRootDir)
+      : cloneStoreState(bestSnapshot.state)
     : cloneStoreState();
 
   if (!nextState.rootDir) {
-    nextState.rootDir = preferredRootDir;
+    nextState.rootDir = activeRootDir;
   } else {
-    nextState.rootDir = replacePathPrefix(nextState.rootDir, legacyRootDir, preferredRootDir);
+    nextState.rootDir = migratedLegacyRoot
+      ? replacePathPrefix(nextState.rootDir, legacyRootDir, preferredRootDir)
+      : replacePathPrefix(nextState.rootDir, preferredRootDir, activeRootDir);
   }
 
   ensureDirectory(path.dirname(preferredStorePath));
@@ -882,7 +904,11 @@ async function buildDragIcon(targetPath) {
 
 function sendToRenderer(channel, payload) {
   if (mainWindow && !mainWindow.isDestroyed()) {
-    mainWindow.webContents.send(channel, payload);
+    try {
+      mainWindow.webContents.send(channel, payload);
+    } catch (_error) {
+      // Ignore transient renderer communication failures during teardown.
+    }
   }
 }
 
@@ -1045,7 +1071,7 @@ app.whenReady().then(() => {
     });
 
     contents.on("context-menu", (event, params) => {
-      if (!params.linkURL || !isDownloadLikeUrl(params.linkURL)) {
+      if (!params.linkURL) {
         return;
       }
       event.preventDefault();
@@ -1053,20 +1079,32 @@ app.whenReady().then(() => {
       if (!tabId) {
         return;
       }
-      const fileName = decodeURIComponent(
-        params.linkURL.split("/").at(-1)?.split("?")[0] ||
-        params.linkText ||
-        "download"
-      );
-      sendToRenderer("download:prompt", {
-        tabId,
-        url: params.linkURL,
-        fileName,
-        label: params.linkText || "",
-        pageUrl: params.pageURL || "",
-        x: params.x ?? 0,
-        y: params.y ?? 0,
-      });
+      if (isDownloadLikeUrl(params.linkURL)) {
+        const fileName = decodeURIComponent(
+          params.linkURL.split("/").at(-1)?.split("?")[0] ||
+          params.linkText ||
+          "download"
+        );
+        sendToRenderer("download:prompt", {
+          tabId,
+          url: params.linkURL,
+          fileName,
+          label: params.linkText || "",
+          pageUrl: params.pageURL || "",
+          x: params.x ?? 0,
+          y: params.y ?? 0,
+        });
+        return;
+      }
+      if (isAllowedUrl(params.linkURL)) {
+        sendToRenderer("link:menu", {
+          tabId,
+          url: params.linkURL,
+          label: params.linkText || "",
+          x: params.x ?? 0,
+          y: params.y ?? 0,
+        });
+      }
     });
 
     contents.on("will-navigate", (event, targetUrl) => {
@@ -1116,105 +1154,115 @@ app.whenReady().then(() => {
   });
 
   fuzzySession.on("will-download", (_event, item, contents) => {
-    const tabId = webContentsToTab.get(contents.id);
-    const context = tabRegistry.get(tabId) ?? {};
-    const courseName = context.courseName || context.title || "Unsorted";
-    const customRequest = tabId ? shiftCustomDownload(tabId) : null;
-    const resolved = customRequest?.mode === "save" ? resolveMapping(courseName, context.url || "") : null;
+    try {
+      const tabId = webContentsToTab.get(contents.id);
+      const context = tabRegistry.get(tabId) ?? {};
+      const courseName = context.courseName || context.title || "Unsorted";
+      const customRequest = tabId ? shiftCustomDownload(tabId) : null;
+      const resolved = customRequest?.mode === "save" ? resolveMapping(courseName, context.url || "") : null;
 
-    let finalPath = "";
-    let targetFolder = "";
+      let finalPath = "";
+      let targetFolder = "";
 
-    if (customRequest?.mode === "preview") {
-      finalPath = buildPreviewPath(customRequest.fileName || item.getFilename() || inferFileNameFromUrl(item.getURL()) || "download");
-      item.setSavePath(finalPath);
-      item.once("done", (_doneEvent, state) => {
-        if (state === "completed") {
-          customRequest.resolve?.({
-            localPath: finalPath,
-            fileName: path.basename(finalPath),
+      if (customRequest?.mode === "preview") {
+        finalPath = buildPreviewPath(customRequest.fileName || item.getFilename() || inferFileNameFromUrl(item.getURL()) || "download");
+        item.setSavePath(finalPath);
+        item.once("done", (_doneEvent, state) => {
+          if (state === "completed") {
+            customRequest.resolve?.({
+              localPath: finalPath,
+              fileName: path.basename(finalPath),
+            });
+            if (!customRequest.suppressOpen) {
+              emitPreviewFileOpen(contents.id, finalPath, path.basename(finalPath));
+            }
+            return;
+          }
+          customRequest.reject?.(new Error("ファイルのプレビュー準備に失敗しました。"));
+          sendToRenderer("download:event", {
+            type: "blocked",
+            message: "ファイルのプレビュー準備に失敗しました。",
           });
-          emitPreviewFileOpen(contents.id, finalPath, path.basename(finalPath));
-          return;
-        }
-        customRequest.reject?.(new Error("ファイルのプレビュー準備に失敗しました。"));
-        sendToRenderer("download:event", {
-          type: "blocked",
-          message: "ファイルのプレビュー準備に失敗しました。",
         });
-      });
-      return;
-    }
-
-    if (customRequest?.mode === "save") {
-      const actualFileName = item.getFilename() || inferFileNameFromUrl(item.getURL()) || "download";
-      const targetFileName = shouldReplacePlaceholderFileName(customRequest.fileName)
-        ? actualFileName
-        : customRequest.fileName;
-      targetFolder = customRequest.folderPath;
-      if (customRequest.lessonFolder) {
-        targetFolder = path.join(targetFolder, customRequest.lessonFolder);
+        return;
       }
-      ensureDirectory(targetFolder);
-      finalPath = uniqueFilePath(path.join(targetFolder, sanitizeFileName(targetFileName)));
-    } else {
-      const autoPreviewPath = buildPreviewPath(item.getFilename() || inferFileNameFromUrl(item.getURL()) || "download");
-      item.setSavePath(autoPreviewPath);
-      item.once("done", (_doneEvent, state) => {
-        if (state === "completed") {
-          emitPreviewFileOpen(contents.id, autoPreviewPath, path.basename(autoPreviewPath));
-          return;
+
+      if (customRequest?.mode === "save") {
+        const actualFileName = item.getFilename() || inferFileNameFromUrl(item.getURL()) || "download";
+        const targetFileName = shouldReplacePlaceholderFileName(customRequest.fileName)
+          ? actualFileName
+          : customRequest.fileName;
+        targetFolder = customRequest.folderPath;
+        if (customRequest.lessonFolder) {
+          targetFolder = path.join(targetFolder, customRequest.lessonFolder);
         }
-        sendToRenderer("download:event", {
-          type: "blocked",
-          message: "ファイルのプレビュー準備に失敗しました。",
+        ensureDirectory(targetFolder);
+        finalPath = uniqueFilePath(path.join(targetFolder, sanitizeFileName(targetFileName)));
+      } else {
+        const autoPreviewPath = buildPreviewPath(item.getFilename() || inferFileNameFromUrl(item.getURL()) || "download");
+        item.setSavePath(autoPreviewPath);
+        item.once("done", (_doneEvent, state) => {
+          if (state === "completed") {
+            emitPreviewFileOpen(contents.id, autoPreviewPath, path.basename(autoPreviewPath));
+            return;
+          }
+          sendToRenderer("download:event", {
+            type: "blocked",
+            message: "ファイルのプレビュー準備に失敗しました。",
+          });
         });
-      });
-      return;
-    }
+        return;
+      }
 
-    if (!targetFolder) {
-      targetFolder = resolved.folderPath;
-      ensureDirectory(targetFolder);
-      finalPath = uniqueFilePath(path.join(targetFolder, item.getFilename()));
-    }
+      if (!targetFolder) {
+        targetFolder = resolved.folderPath;
+        ensureDirectory(targetFolder);
+        finalPath = uniqueFilePath(path.join(targetFolder, item.getFilename()));
+      }
 
-    item.setSavePath(finalPath);
+      item.setSavePath(finalPath);
 
-    store.addDownloadHistory({
-      courseName,
-      sourceUrl: context.url || item.getURL(),
-      targetPath: finalPath,
-      status: "started",
-    });
-
-    sendToRenderer("download:event", {
-      type: "started",
-      courseName,
-      fileName: path.basename(finalPath),
-      savePath: finalPath,
-      tabId,
-      folderPath: targetFolder,
-      suggestions: resolved?.suggestions || [],
-      requiresReview: !customRequest && resolved?.matchType === "new-folder",
-    });
-
-    item.once("done", (_doneEvent, state) => {
       store.addDownloadHistory({
         courseName,
         sourceUrl: context.url || item.getURL(),
         targetPath: finalPath,
-        status: state,
+        status: "started",
       });
 
       sendToRenderer("download:event", {
-        type: state,
+        type: "started",
         courseName,
         fileName: path.basename(finalPath),
         savePath: finalPath,
         tabId,
+        folderPath: targetFolder,
+        suggestions: resolved?.suggestions || [],
+        requiresReview: !customRequest && resolved?.matchType === "new-folder",
       });
-    });
+
+      item.once("done", (_doneEvent, state) => {
+        store.addDownloadHistory({
+          courseName,
+          sourceUrl: context.url || item.getURL(),
+          targetPath: finalPath,
+          status: state,
+        });
+
+        sendToRenderer("download:event", {
+          type: state,
+          courseName,
+          fileName: path.basename(finalPath),
+          savePath: finalPath,
+          tabId,
+        });
+      });
+    } catch (_error) {
+      try {
+        item.cancel();
+      } catch (_cancelError) {
+        // Ignore cancellation failures during error recovery.
+      }
+    }
   });
 
   app.on("activate", () => {
@@ -1393,6 +1441,7 @@ ipcMain.handle("download:start-custom", async (_event, payload) => {
   return await new Promise((resolve, reject) => {
     queueCustomDownload(payload.tabId, {
       mode: "preview",
+      suppressOpen: true,
       fileName: sanitizeFileName(
         payload.fileName && !shouldReplacePlaceholderFileName(payload.fileName)
           ? payload.fileName

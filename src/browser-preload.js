@@ -120,6 +120,56 @@ function readCourseContext() {
   });
 }
 
+function isDownloadLikeUrl(href) {
+  return (
+    /\.(pdf|docx?|pptx?|xlsx?|zip)(\?|$)/i.test(href) ||
+    /mod\/resource\/view\.php/i.test(href) ||
+    /pluginfile\.php/i.test(href)
+  );
+}
+
+function handleLinkContextMenu(event) {
+  const target = event.target instanceof Element ? event.target : null;
+  const anchor = target?.closest("a[href]");
+  if (!anchor) {
+    safeSendToHost("hide-context-menu", {});
+    return;
+  }
+  if (isDownloadLikeUrl(anchor.href)) {
+    safeSendToHost("hide-context-menu", {});
+    return;
+  }
+
+  event.preventDefault();
+  event.stopPropagation();
+  event.stopImmediatePropagation?.();
+  safeSendToHost("link-menu", {
+    url: anchor.href,
+    label: (anchor.textContent || "").trim(),
+    x: event.clientX,
+    y: event.clientY,
+  });
+}
+
+function handleLinkAuxClick(event) {
+  if (event.button !== 1) {
+    return;
+  }
+  const target = event.target instanceof Element ? event.target : null;
+  const anchor = target?.closest("a[href]");
+  if (!anchor || isDownloadLikeUrl(anchor.href)) {
+    return;
+  }
+
+  event.preventDefault();
+  event.stopPropagation();
+  event.stopImmediatePropagation?.();
+  safeSendToHost("open-link-tab", {
+    url: anchor.href,
+    label: (anchor.textContent || "").trim(),
+  });
+}
+
 const scheduleCourseContextUpdate = debounce(readCourseContext, 200);
 
 window.addEventListener("DOMContentLoaded", () => {
@@ -135,6 +185,8 @@ window.addEventListener("DOMContentLoaded", () => {
   document.addEventListener("click", () => {
     setTimeout(readCourseContext, 80);
   }, true);
+  document.addEventListener("contextmenu", handleLinkContextMenu, true);
+  document.addEventListener("auxclick", handleLinkAuxClick, true);
 });
 
 window.addEventListener("load", readCourseContext);
