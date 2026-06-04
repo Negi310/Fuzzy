@@ -34,6 +34,14 @@ const state = {
   timelineEntries: [],
   tabs: [],
   activeTabId: null,
+  draggedTabId: null,
+  splitView: {
+    enabled: false,
+    editing: false,
+    primaryTabId: null,
+    secondaryTabId: null,
+    ratio: 0.5,
+  },
   activePanelTab: "explorer",
   panelVisible: true,
   dashboardLoaded: false,
@@ -51,6 +59,7 @@ const state = {
 const elements = {
   browserTabStrip: document.querySelector("#browser-tab-strip"),
   browserContent: document.querySelector("#browser-content"),
+  browserSplitter: document.querySelector("#browser-splitter"),
   addressInput: document.querySelector("#address-input"),
   activeCourseLabel: document.querySelector("#active-course-label"),
   currentDirLabel: document.querySelector("#current-dir-label"),
@@ -370,6 +379,172 @@ function getActiveTab() {
   return state.tabs.find((tab) => tab.id === state.activeTabId) ?? null;
 }
 
+function getTabById(tabId) {
+  return state.tabs.find((tab) => tab.id === tabId) ?? null;
+}
+
+function clamp(value, min, max) {
+  return Math.min(Math.max(value, min), max);
+}
+
+function disableSplitView() {
+  state.splitView.enabled = false;
+  state.splitView.editing = false;
+  state.splitView.primaryTabId = null;
+  state.splitView.secondaryTabId = null;
+  renderBrowserLayout();
+}
+
+function openSplitViewWithTab(tabId) {
+  const targetTab = getTabById(tabId);
+  const primaryTab = getActiveTab();
+  if (!targetTab || !primaryTab || targetTab.id === primaryTab.id) {
+    return;
+  }
+  state.splitView.enabled = true;
+  state.splitView.primaryTabId = primaryTab.id;
+  state.splitView.secondaryTabId = targetTab.id;
+  state.splitView.ratio = clamp(state.splitView.ratio || 0.5, 0.25, 0.75);
+  renderBrowserLayout();
+}
+
+function normalizeSplitView() {
+  if (!state.splitView.enabled) {
+    return;
+  }
+
+  let primaryTab = getTabById(state.splitView.primaryTabId || state.activeTabId);
+  let secondaryTab = getTabById(state.splitView.secondaryTabId);
+
+  if (!primaryTab && secondaryTab) {
+    primaryTab = secondaryTab;
+    secondaryTab = null;
+  }
+
+  if (!primaryTab) {
+    disableSplitView();
+    return;
+  }
+
+  const candidates = state.tabs.filter((tab) => tab.id !== primaryTab.id);
+  if ((!secondaryTab || secondaryTab.id === primaryTab.id) && candidates.length) {
+    secondaryTab = getTabById(state.activeTabId);
+    if (!secondaryTab || secondaryTab.id === primaryTab.id) {
+      secondaryTab = candidates.at(-1) || null;
+    }
+  }
+
+  if (!secondaryTab || secondaryTab.id === primaryTab.id) {
+    disableSplitView();
+    state.activeTabId = primaryTab.id;
+    return;
+  }
+
+  state.splitView.primaryTabId = primaryTab.id;
+  state.splitView.secondaryTabId = secondaryTab.id;
+}
+
+function attachNewTabToSplit(tabId) {
+  if (!state.splitView.enabled) {
+    return false;
+  }
+  const primaryTab = getTabById(state.splitView.primaryTabId || state.activeTabId);
+  if (!primaryTab || primaryTab.id === tabId) {
+    return false;
+  }
+  state.splitView.primaryTabId = primaryTab.id;
+  state.splitView.secondaryTabId = tabId;
+  return true;
+}
+
+function toggleSplitEditMode() {
+  state.splitView.editing = !state.splitView.editing;
+  renderBrowserTabs();
+  toast(state.splitView.editing ? "画面分割の編集モード" : "画面分割の編集モードを終了", "info");
+}
+
+function reorderTabs(sourceTabId, targetTabId, insertAfter = false) {
+  if (!sourceTabId || !targetTabId || sourceTabId === targetTabId) {
+    return;
+  }
+  const tabs = [...state.tabs];
+  const sourceIndex = tabs.findIndex((tab) => tab.id === sourceTabId);
+  const targetIndex = tabs.findIndex((tab) => tab.id === targetTabId);
+  if (sourceIndex < 0 || targetIndex < 0) {
+    return;
+  }
+  const [moved] = tabs.splice(sourceIndex, 1);
+  const adjustedTargetIndex = tabs.findIndex((tab) => tab.id === targetTabId);
+  tabs.splice(adjustedTargetIndex + (insertAfter ? 1 : 0), 0, moved);
+  state.tabs = tabs;
+  renderBrowserTabs();
+}
+
+function renderBrowserLayout() {
+  const splitter = elements.browserSplitter;
+  const primaryTab = getTabById(state.splitView.primaryTabId || state.activeTabId);
+  const secondaryTab = getTabById(state.splitView.secondaryTabId);
+  const canSplit = Boolean(
+    state.splitView.enabled &&
+    primaryTab &&
+    secondaryTab &&
+    primaryTab.id !== secondaryTab.id
+  );
+
+  if (!canSplit) {
+    splitter.classList.add("hidden");
+    splitter.setAttribute("aria-hidden", "true");
+    for (const tab of state.tabs) {
+      if (!tab.contentEl) {
+        continue;
+      }
+      const isVisible = tab.id === state.activeTabId;
+      tab.contentEl.classList.toggle("visible", isVisible);
+      tab.contentEl.style.left = "";
+      tab.contentEl.style.top = "";
+      tab.contentEl.style.width = "";
+      tab.contentEl.style.height = "";
+    }
+    return;
+  }
+
+  const bounds = elements.browserContent.getBoundingClientRect();
+  const splitterWidth = 8;
+  const ratio = clamp(state.splitView.ratio || 0.5, 0.25, 0.75);
+  const primaryWidth = Math.round((bounds.width - splitterWidth) * ratio);
+  const secondaryLeft = primaryWidth + splitterWidth;
+  const secondaryWidth = Math.max(bounds.width - secondaryLeft, 0);
+
+  for (const tab of state.tabs) {
+    if (!tab.contentEl) {
+      continue;
+    }
+    const isPrimary = tab.id === primaryTab.id;
+    const isSecondary = tab.id === secondaryTab.id;
+    tab.contentEl.classList.toggle("visible", isPrimary || isSecondary);
+    if (isPrimary) {
+      tab.contentEl.style.left = "0px";
+      tab.contentEl.style.top = "0px";
+      tab.contentEl.style.width = `${primaryWidth}px`;
+      tab.contentEl.style.height = "100%";
+    } else if (isSecondary) {
+      tab.contentEl.style.left = `${secondaryLeft}px`;
+      tab.contentEl.style.top = "0px";
+      tab.contentEl.style.width = `${secondaryWidth}px`;
+      tab.contentEl.style.height = "100%";
+    } else {
+      tab.contentEl.style.left = "";
+      tab.contentEl.style.top = "";
+      tab.contentEl.style.width = "";
+      tab.contentEl.style.height = "";
+    }
+  }
+
+  splitter.classList.remove("hidden");
+  splitter.setAttribute("aria-hidden", "false");
+  splitter.style.left = `${primaryWidth}px`;
+}
+
 function findTab(tabId) {
   return state.tabs.find((tab) => tab.id === tabId) || null;
 }
@@ -657,7 +832,8 @@ function createBrowserTab(url, title = UI_TEXT.defaultBrowserTitle) {
   };
   state.tabs.push(tab);
   mountTab(tab);
-  activateTab(tab.id);
+  const preserveSplitRoles = attachNewTabToSplit(tab.id);
+  activateTab(tab.id, { preserveSplitRoles });
 }
 
 function createLocalPdfTab(filePath, title, options = {}) {
@@ -673,7 +849,8 @@ function createLocalPdfTab(filePath, title, options = {}) {
   };
   state.tabs.push(tab);
   mountTab(tab);
-  activateTab(tab.id);
+  const preserveSplitRoles = attachNewTabToSplit(tab.id);
+  activateTab(tab.id, { preserveSplitRoles });
 }
 
 function createRemotePdfTab(pdfUrl, title, sourceTab) {
@@ -691,7 +868,8 @@ function createRemotePdfTab(pdfUrl, title, sourceTab) {
   };
   state.tabs.push(tab);
   mountTab(tab);
-  activateTab(tab.id);
+  const preserveSplitRoles = attachNewTabToSplit(tab.id);
+  activateTab(tab.id, { preserveSplitRoles });
 }
 
 function createRemoteFileTab(fileUrl, title, sourceTab) {
@@ -709,7 +887,8 @@ function createRemoteFileTab(fileUrl, title, sourceTab) {
   };
   state.tabs.push(tab);
   mountTab(tab);
-  activateTab(tab.id);
+  const preserveSplitRoles = attachNewTabToSplit(tab.id);
+  activateTab(tab.id, { preserveSplitRoles });
 }
 
 function closeTab(tabId) {
@@ -753,7 +932,8 @@ function closeTab(tabId) {
     state.activeTabId = state.tabs.at(-1).id;
   }
 
-  activateTab(state.activeTabId);
+  normalizeSplitView();
+  activateTab(state.activeTabId, { preserveSplitRoles: true });
 }
 
 function ensureDashboardLoaded() {
@@ -1154,6 +1334,16 @@ function mountBrowserLikeTab(tab, usePreload = true) {
       return;
     }
 
+    if (event.channel === "link-menu") {
+      openWebLinkMenu(payload);
+      return;
+    }
+
+    if (event.channel === "open-link-tab") {
+      createBrowserTab(payload.url, payload.label || UI_TEXT.defaultBrowserTitle);
+      return;
+    }
+
     if (event.channel === "hide-context-menu") {
       hideContextMenu();
       return;
@@ -1192,6 +1382,7 @@ function mountBrowserLikeTab(tab, usePreload = true) {
   tab.contentEl = contentEl;
   contentEl.appendChild(webview);
   elements.browserContent.appendChild(contentEl);
+  renderBrowserLayout();
 }
 
 function syncTabFromWebview(tab) {
@@ -1246,6 +1437,7 @@ function mountLocalPdfTab(tab) {
   contentEl.appendChild(frame);
   tab.contentEl = contentEl;
   elements.browserContent.appendChild(contentEl);
+  renderBrowserLayout();
 }
 
 function mountFileFrameTab(tab, src) {
@@ -1257,6 +1449,7 @@ function mountFileFrameTab(tab, src) {
   contentEl.appendChild(frame);
   tab.contentEl = contentEl;
   elements.browserContent.appendChild(contentEl);
+  renderBrowserLayout();
 }
 
 function createLocalFileTab(filePath, title, options = {}) {
@@ -1272,7 +1465,8 @@ function createLocalFileTab(filePath, title, options = {}) {
   };
   state.tabs.push(tab);
   mountTab(tab);
-  activateTab(tab.id);
+  const preserveSplitRoles = attachNewTabToSplit(tab.id);
+  activateTab(tab.id, { preserveSplitRoles });
 }
 
 function openLocalFileInTab(filePath, title, options = {}) {
@@ -1570,11 +1764,74 @@ function renderBrowserTabs() {
     button.type = "button";
     button.className = `browser-tab ${tab.id === state.activeTabId ? "active" : ""}`;
     button.dataset.tabId = tab.id;
+    button.draggable = false;
     button.innerHTML = `
       <span class="tab-dot ${getTabColor(tab.kind)}"></span>
       <span class="tab-title">${escapeHtml(tab.title || UI_TEXT.defaultBrowserTitle)}</span>
       <span class="tab-close" data-close-tab="${tab.id}">×</span>
     `;
+    button.addEventListener("mousedown", (event) => {
+      const closeTarget = closestFromEventTarget(event.target, "[data-close-tab]");
+      button.draggable = event.button === 0 && !closeTarget;
+    });
+    button.addEventListener("mouseup", () => {
+      button.draggable = false;
+    });
+    button.addEventListener("auxclick", (event) => {
+      if (event.button !== 1) {
+        return;
+      }
+      event.preventDefault();
+      event.stopPropagation();
+      toggleSplitEditMode();
+    });
+    button.addEventListener("dragstart", (event) => {
+      if (!button.draggable) {
+        event.preventDefault();
+        return;
+      }
+      state.draggedTabId = tab.id;
+      event.dataTransfer.effectAllowed = "move";
+      event.dataTransfer.setData("text/plain", tab.id);
+    });
+    button.addEventListener("dragend", () => {
+      state.draggedTabId = null;
+      button.draggable = false;
+    });
+    button.addEventListener("dragover", (event) => {
+      event.preventDefault();
+      event.dataTransfer.dropEffect = "move";
+    });
+    button.addEventListener("drop", (event) => {
+      event.preventDefault();
+      const sourceTabId = state.draggedTabId || event.dataTransfer.getData("text/plain");
+      const rect = button.getBoundingClientRect();
+      const insertAfter = event.clientX > rect.left + rect.width / 2;
+      reorderTabs(sourceTabId, tab.id, insertAfter);
+    });
+    button.addEventListener("contextmenu", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      button.draggable = false;
+      const items = [
+        ...(tab.id !== state.activeTabId ? [{
+          label: "右に分割表示",
+          action: async () => {
+            openSplitViewWithTab(tab.id);
+          },
+        }] : []),
+        ...(state.splitView.enabled && (state.splitView.secondaryTabId === tab.id || state.splitView.primaryTabId === tab.id) ? [{
+          label: "分割を閉じる",
+          action: async () => {
+            disableSplitView();
+          },
+        }] : []),
+      ];
+      if (!items.length) {
+        return;
+      }
+      showContextMenu(items, event.clientX, event.clientY);
+    });
     elements.browserTabStrip.appendChild(button);
   }
 
@@ -1586,15 +1843,35 @@ function renderBrowserTabs() {
   elements.browserTabStrip.appendChild(addButton);
 }
 
-function activateTab(tabId) {
-  state.activeTabId = tabId;
-  for (const tab of state.tabs) {
-    tab.contentEl?.classList.toggle("active", tab.id === tabId);
+function activateTab(tabId, options = {}) {
+  if (state.splitView.enabled && !options.preserveSplitRoles) {
+    if (state.splitView.secondaryTabId === tabId) {
+      const previousPrimary = state.splitView.primaryTabId || state.activeTabId;
+      state.splitView.primaryTabId = tabId;
+      state.splitView.secondaryTabId = previousPrimary && previousPrimary !== tabId ? previousPrimary : state.splitView.secondaryTabId;
+    } else {
+      state.splitView.primaryTabId = tabId;
+    }
   }
+  state.activeTabId = tabId;
   renderBrowserTabs();
+  renderBrowserLayout();
   syncAddressBar();
   focusBrowserSurface(getActiveTab());
   void updateCurrentCourse(getActiveTab());
+}
+
+function openWebLinkMenu(payload) {
+  const x = payload.x || Math.round(window.innerWidth / 2);
+  const y = payload.y || Math.round(window.innerHeight / 2);
+  showContextMenu([
+    {
+      label: "別のタブで開く",
+      action: async () => {
+        createBrowserTab(payload.url, payload.label || UI_TEXT.defaultBrowserTitle);
+      },
+    },
+  ], x, y);
 }
 
 async function updateCurrentCourse(tab) {
@@ -1840,13 +2117,13 @@ async function saveRemoteFile(payload, tab, overrides = {}) {
   });
 }
 
-async function configureSubmissionFolder(mapping, onComplete = null) {
+async function configureSubmissionFolder(mapping, onComplete = null, menuPosition = null) {
   if (!mapping) {
     toast("先にコースフォルダを紐づけてください", "warn");
     return;
   }
-  const x = Math.round(window.innerWidth / 2);
-  const y = Math.round(window.innerHeight / 2);
+  const x = Math.round(menuPosition?.x ?? window.innerWidth / 2);
+  const y = Math.round(menuPosition?.y ?? window.innerHeight / 2);
   showContextMenu([
     {
       label: "新しく提出フォルダを作成",
@@ -1944,6 +2221,22 @@ function absorbWheelEvent(event) {
 }
 
 function wireEvents() {
+  elements.browserSplitter.addEventListener("mousedown", (event) => {
+    event.preventDefault();
+    const onMove = (moveEvent) => {
+      const bounds = elements.browserContent.getBoundingClientRect();
+      const nextRatio = (moveEvent.clientX - bounds.left) / Math.max(bounds.width, 1);
+      state.splitView.ratio = clamp(nextRatio, 0.25, 0.75);
+      renderBrowserLayout();
+    };
+    const onUp = () => {
+      window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("mouseup", onUp);
+    };
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onUp);
+  });
+
   elements.contextMenuBackdrop.addEventListener("mousedown", hideContextMenu);
   elements.contextMenuBackdrop.addEventListener("click", hideContextMenu);
   elements.sidePanel.addEventListener("wheel", absorbWheelEvent, { passive: true });
@@ -1970,6 +2263,7 @@ function wireEvents() {
   document.addEventListener("contextmenu", (event) => {
     if (
       !closestFromEventTarget(event.target, ".file-row") &&
+      !closestFromEventTarget(event.target, ".browser-tab") &&
       !closestFromEventTarget(event.target, "#context-menu") &&
       !closestFromEventTarget(event.target, "#file-list")
     ) {
@@ -2055,6 +2349,24 @@ function wireEvents() {
 
     const tabTarget = event.target.closest("[data-tab-id]");
     if (tabTarget) {
+      if (state.splitView.editing) {
+        const selectedTabId = tabTarget.dataset.tabId;
+        const primaryTabId = state.splitView.enabled
+          ? (state.splitView.primaryTabId || state.activeTabId)
+          : state.activeTabId;
+        if (selectedTabId !== primaryTabId) {
+          state.splitView.enabled = true;
+          state.splitView.primaryTabId = primaryTabId;
+          state.splitView.secondaryTabId = selectedTabId;
+          state.activeTabId = selectedTabId;
+          renderBrowserTabs();
+          renderBrowserLayout();
+          syncAddressBar();
+          focusBrowserSurface(getActiveTab());
+          void updateCurrentCourse(getActiveTab());
+        }
+        return;
+      }
       activateTab(tabTarget.dataset.tabId);
     }
   });
@@ -2200,7 +2512,10 @@ function wireEvents() {
       return;
     }
     if (!mapping.submissionFolderPath) {
-      await configureSubmissionFolder(mapping);
+      await configureSubmissionFolder(mapping, null, {
+        x: event.clientX,
+        y: event.clientY,
+      });
       return;
     }
     await loadDirectory(mapping.submissionFolderPath, { syncBrowserFromDirectory: false });
@@ -2241,6 +2556,7 @@ function wireEvents() {
 
   window.addEventListener("resize", positionDockToggle);
   window.addEventListener("resize", hideContextMenu);
+  window.addEventListener("resize", renderBrowserLayout);
 }
 
 async function initialize() {
@@ -2316,6 +2632,10 @@ window.fuzzyApi.onDownloadPrompt(async (payload) => {
     return;
   }
   openMoodleFileMenu(payload, tab);
+});
+
+window.fuzzyApi.onLinkMenu((payload) => {
+  openWebLinkMenu(payload);
 });
 
 initialize();

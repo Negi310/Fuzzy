@@ -98,8 +98,25 @@ button {
   background: #ffffff;
 }
 
-.browser-surface.active {
+.browser-surface.visible {
   display: block;
+}
+
+.browser-splitter {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 8px;
+  margin-left: -4px;
+  background: rgba(21, 96, 216, 0.08);
+  border-left: 1px solid rgba(21, 96, 216, 0.18);
+  border-right: 1px solid rgba(21, 96, 216, 0.18);
+  cursor: col-resize;
+  z-index: 5;
+}
+
+.browser-splitter.hidden {
+  display: none;
 }
 
 .browser-view,
@@ -124,6 +141,10 @@ button {
   color: #4d5f7b;
   cursor: pointer;
   font-size: 13px;
+}
+
+.browser-tab:active {
+  cursor: grabbing;
 }
 
 .browser-tab.active {
@@ -159,13 +180,15 @@ button {
 
 .tab-close {
   margin-left: auto;
-  width: 16px;
-  height: 16px;
+  width: 24px;
+  height: 24px;
   border: 0;
   border-radius: 999px;
   background: transparent;
   color: #6c7e98;
   cursor: pointer;
+  font-size: 16px;
+  line-height: 1;
 }
 
 .tab-close:hover {
