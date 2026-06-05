@@ -1,6 +1,6 @@
 {
   "name": "fuzitter",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "author": "Negi310",
   "description": "Moodle-integrated desktop workspace for local file organization",
   "main": "src/main.js",
@@ -59,12 +59,12 @@
   "dependencies": {
     "electron-updater": "^6.8.3"
   },
+  "dependencies": {
+    "electron-updater": "^6.8.3"
+  },
   "devDependencies": {
     "@electron/packager": "^18.4.4",
     "electron": "^37.0.0",
     "electron-builder": "^26.0.12"
-  },
-  "dependencies": {
-    "electron-updater": "^6.8.3"
   }
 }
