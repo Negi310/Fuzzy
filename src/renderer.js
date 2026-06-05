@@ -54,6 +54,12 @@ const state = {
     state: "idle",
     message: "Timeline loading...",
   },
+  autoUpdate: {
+    enabled: false,
+    downloaded: false,
+    currentVersion: "",
+    message: "",
+  },
 };
 
 const elements = {
@@ -66,6 +72,9 @@ const elements = {
   rootDirLabel: document.querySelector("#root-dir-label"),
   moodleHomeInput: document.querySelector("#moodle-home-input"),
   saveMoodleHomeButton: document.querySelector("#save-moodle-home-button"),
+  updateStatusLabel: document.querySelector("#update-status-label"),
+  checkUpdatesButton: document.querySelector("#check-updates-button"),
+  installUpdateButton: document.querySelector("#install-update-button"),
   fileList: document.querySelector("#file-list"),
   mappingList: document.querySelector("#mapping-list"),
   timelineList: document.querySelector("#timeline-list"),
@@ -131,6 +140,34 @@ function setMoodleHome(nextUrl) {
   if (elements.moodleHomeInput) {
     elements.moodleHomeInput.value = nextUrl;
   }
+}
+
+function renderAutoUpdateStatus() {
+  if (!elements.updateStatusLabel) {
+    return;
+  }
+
+  const baseMessage = state.autoUpdate.message || (
+    state.autoUpdate.enabled
+      ? `現在のバージョン: ${state.autoUpdate.currentVersion || "-"}`
+      : "自動更新はインストール版でのみ利用できます。"
+  );
+
+  elements.updateStatusLabel.textContent = baseMessage;
+  if (elements.checkUpdatesButton) {
+    elements.checkUpdatesButton.disabled = Boolean(state.autoUpdate.checking);
+  }
+  if (elements.installUpdateButton) {
+    elements.installUpdateButton.disabled = !state.autoUpdate.downloaded;
+  }
+}
+
+function applyAutoUpdateStatus(payload = {}) {
+  state.autoUpdate = {
+    ...state.autoUpdate,
+    ...payload,
+  };
+  renderAutoUpdateStatus();
 }
 
 function sanitizeFolderName(name) {
@@ -2425,6 +2462,31 @@ function wireEvents() {
     }
   });
 
+  elements.checkUpdatesButton?.addEventListener("click", async () => {
+    try {
+      const status = await window.fuzzyApi.checkForUpdates();
+      applyAutoUpdateStatus(status);
+      if (!status.enabled) {
+        toast("自動更新はインストール版でのみ利用できます", "warn");
+      }
+    } catch (error) {
+      toast(error.message, "error");
+    }
+  });
+
+  elements.installUpdateButton?.addEventListener("click", async () => {
+    try {
+      const result = await window.fuzzyApi.installDownloadedUpdate();
+      if (!result.ok) {
+        toast("まだ適用できる更新がありません", "warn");
+        return;
+      }
+      toast("更新を適用するため再起動します", "info");
+    } catch (error) {
+      toast(error.message, "error");
+    }
+  });
+
   document.querySelector("#mapping-create-folder").addEventListener("click", async () => {
     if (!state.pendingMappingCourse) {
       return;
@@ -2563,6 +2625,10 @@ async function initialize() {
   const defaults = await window.fuzzyApi.getDefaults();
   setMoodleHome(defaults.moodleHome);
   state.dashboardAutoload = Boolean(defaults.dashboardAutoload);
+  applyAutoUpdateStatus({
+    currentVersion: defaults.appVersion || "",
+    ...(defaults.autoUpdate || {}),
+  });
 
   const initial = await window.fuzzyApi.getState();
   state.rootDir = initial.rootDir;
@@ -2586,6 +2652,17 @@ async function initialize() {
 
   createBrowserTab(state.moodleHome, UI_TEXT.defaultBrowserTitle);
 }
+
+window.fuzzyApi.onAppUpdateEvent((payload) => {
+  applyAutoUpdateStatus(payload);
+  if (payload.type === "update-available") {
+    toast("新しい更新のダウンロードを開始しました", "info");
+  } else if (payload.type === "update-downloaded") {
+    toast("更新の準備ができました。設定から再起動して適用できます", "success");
+  } else if (payload.type === "error") {
+    toast(payload.message || "更新中にエラーが発生しました", "error");
+  }
+});
 
 window.fuzzyApi.onDownloadEvent(async (payload) => {
   if (payload.type === "started") {

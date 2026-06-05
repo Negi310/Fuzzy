@@ -19,7 +19,7 @@
               <span class="address-icon">⌂</span>
               <input id="address-input" class="address-input" type="text" autocomplete="off" />
               <button type="button" class="address-button" data-action="favorite" title="お気に入り">☆</button>
-              <button type="button" class="address-button" data-action="menu" title="メニュー">⋮</button>
+              <button type="button" class="address-button" data-action="menu" title="メニュー">⚙</button>
             </div>
           </div>
           <div id="browser-content" class="browser-content">
@@ -36,7 +36,7 @@
                 <button id="panel-refresh-button" type="button" class="icon-button" title="更新">⟳</button>
                 <button id="open-settings-button" type="button" class="icon-button" title="設定">⚙</button>
               </div>
-              <button id="hide-side-panel-button" type="button" class="panel-close-button" title="右パネルを隠す">×</button>
+              <button id="hide-side-panel-button" type="button" class="panel-close-button" title="右パネルを閉じる">×</button>
             </div>
 
             <section id="explorer-panel" class="panel-view active">
@@ -77,7 +77,7 @@
       </main>
 
       <div class="panel-dock">
-        <button id="dock-toggle-button" type="button" class="dock-toggle-button" title="右パネルの表示切替">◀</button>
+        <button id="dock-toggle-button" type="button" class="dock-toggle-button" title="右パネルの表示切替">≡</button>
       </div>
 
       <dialog id="settings-dialog" class="settings-dialog">
@@ -97,6 +97,17 @@
             <label class="setting-label" for="moodle-home-input">Moodle URL</label>
             <input id="moodle-home-input" class="dialog-input" type="text" />
             <button id="save-moodle-home-button" type="button" class="secondary-button">保存</button>
+          </section>
+
+          <section class="settings-section">
+            <div class="dialog-header compact">
+              <h2>更新</h2>
+            </div>
+            <div id="update-status-label" class="path-chip">起動後に更新状況を確認します</div>
+            <div class="dialog-inline-actions">
+              <button id="check-updates-button" type="button" class="secondary-button">更新を確認</button>
+              <button id="install-update-button" type="button" class="secondary-button" disabled>再起動して更新</button>
+            </div>
           </section>
 
           <section class="settings-section">

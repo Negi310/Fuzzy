@@ -3,6 +3,8 @@ const { contextBridge, ipcRenderer } = require("electron");
 contextBridge.exposeInMainWorld("fuzzyApi", {
   getDefaults: () => ipcRenderer.invoke("app:defaults"),
   updatePreferences: (payload) => ipcRenderer.invoke("app:preferences:update", payload),
+  checkForUpdates: () => ipcRenderer.invoke("app:update:check"),
+  installDownloadedUpdate: () => ipcRenderer.invoke("app:update:install"),
   getState: () => ipcRenderer.invoke("state:get"),
   chooseRootDirectory: () => ipcRenderer.invoke("root:choose"),
   listDirectory: (targetPath) => ipcRenderer.invoke("directory:list", targetPath),
@@ -35,4 +37,5 @@ contextBridge.exposeInMainWorld("fuzzyApi", {
   onOpenRemotePdf: (handler) => ipcRenderer.on("pdf:open-remote", (_event, payload) => handler(payload)),
   onOpenRemoteFile: (handler) => ipcRenderer.on("file:open-remote", (_event, payload) => handler(payload)),
   onOpenPreviewFile: (handler) => ipcRenderer.on("file:open-preview", (_event, payload) => handler(payload)),
+  onAppUpdateEvent: (handler) => ipcRenderer.on("app:update:event", (_event, payload) => handler(payload)),
 });

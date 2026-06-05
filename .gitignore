@@ -1,3 +1,8 @@
 *.pdf
 node_modules/
 local-dist/
+dist/win-unpacked/
+dist/builder-debug.yml
+dist/latest.yml
+dist/*-Setup-*.exe
+dist/*.blockmap

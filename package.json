@@ -1,13 +1,66 @@
 {
   "name": "fuzitter",
-  "version": "0.1.0",
+  "version": "0.1.1",
+  "author": "Negi310",
   "description": "Moodle-integrated desktop workspace for local file organization",
   "main": "src/main.js",
   "scripts": {
     "start": "electron .",
     "test": "node --test",
-    "build": "electron-packager . Fuzitter --platform=win32 --arch=x64 --out=dist --overwrite --icon=assets/fuzitter.ico --ignore=tmp_i2_review",
+    "build": "electron-builder --win nsis",
+    "build:dir": "electron-builder --win dir",
     "build:local": "electron-packager . Fuzitter --platform=win32 --arch=x64 --out=local-dist --overwrite --icon=assets/fuzitter.ico --ignore=tmp_i2_review"
+  },
+  "build": {
+    "appId": "com.negi310.fuzitter",
+    "productName": "Fuzitter",
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "assets/**/*",
+      "docs/**/*",
+      "src/**/*",
+      "tests/**/*",
+      "package.json",
+      "package-lock.json",
+      ".antigravityrules.md",
+      ".gitattributes",
+      ".gitignore"
+    ],
+    "extraMetadata": {
+      "main": "src/main.js"
+    },
+    "win": {
+      "icon": "assets/fuzitter.ico",
+      "signAndEditExecutable": false,
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ]
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "artifactName": "${productName}-Setup-${version}.${ext}"
+    },
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "Negi310",
+        "repo": "Fuzzy"
+      }
+    ]
+  },
+  "dependencies": {
+    "electron-updater": "^6.8.3"
+  },
+  "dependencies": {
+    "electron-updater": "^6.8.3"
   },
   "devDependencies": {
     "@electron/packager": "^18.4.4",

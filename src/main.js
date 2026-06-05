@@ -4,6 +4,7 @@ const http = require("node:http");
 const https = require("node:https");
 const path = require("node:path");
 const { app, BrowserWindow, dialog, ipcMain, nativeImage, session, shell, webContents } = require("electron");
+const { autoUpdater } = require("electron-updater");
 
 const { rankCandidates } = require("./similarity");
 const { Store } = require("./store");
@@ -37,6 +38,15 @@ let isQuittingAfterSessionFlush = false;
 const tabRegistry = new Map();
 const webContentsToTab = new Map();
 const customDownloadQueues = new Map();
+const updateState = {
+  enabled: false,
+  checking: false,
+  downloaded: false,
+  available: false,
+  currentVersion: app.getVersion(),
+  message: "",
+  releaseName: "",
+};
 
 process.on("uncaughtException", (error) => {
   if (error?.code === "EPIPE") {
@@ -44,6 +54,155 @@ process.on("uncaughtException", (error) => {
   }
   throw error;
 });
+
+function getAutoUpdateStatus() {
+  return {
+    enabled: updateState.enabled,
+    checking: updateState.checking,
+    downloaded: updateState.downloaded,
+    available: updateState.available,
+    currentVersion: updateState.currentVersion,
+    message: updateState.message,
+    releaseName: updateState.releaseName,
+  };
+}
+
+function emitAutoUpdateEvent(payload = {}) {
+  sendToRenderer("app:update:event", {
+    ...getAutoUpdateStatus(),
+    ...payload,
+  });
+}
+
+function canUseAutoUpdater() {
+  if (process.platform !== "win32" || !app.isPackaged) {
+    return false;
+  }
+
+  const normalizedExecPath = path.resolve(process.execPath);
+  return !(
+    normalizedExecPath.includes(`${path.sep}local-dist${path.sep}`) ||
+    normalizedExecPath.includes(`${path.sep}dist${path.sep}`)
+  );
+}
+
+async function triggerAutoUpdateCheck(source = "startup") {
+  if (!updateState.enabled) {
+    updateState.message = "自動更新はインストール版でのみ利用できます。";
+    emitAutoUpdateEvent({
+      type: "disabled",
+      source,
+      message: updateState.message,
+    });
+    return getAutoUpdateStatus();
+  }
+
+  if (updateState.checking) {
+    return getAutoUpdateStatus();
+  }
+
+  updateState.checking = true;
+  updateState.message = "更新を確認しています...";
+  emitAutoUpdateEvent({
+    type: "checking-for-update",
+    source,
+    message: updateState.message,
+  });
+
+  try {
+    await autoUpdater.checkForUpdates();
+  } catch (error) {
+    updateState.checking = false;
+    updateState.message = error.message || "更新の確認に失敗しました。";
+    emitAutoUpdateEvent({
+      type: "error",
+      source,
+      message: updateState.message,
+    });
+  }
+
+  return getAutoUpdateStatus();
+}
+
+function setupAutoUpdater() {
+  updateState.enabled = canUseAutoUpdater();
+  updateState.currentVersion = app.getVersion();
+
+  if (!updateState.enabled) {
+    updateState.message = "自動更新はインストール版でのみ利用できます。";
+    return;
+  }
+
+  autoUpdater.autoDownload = true;
+  autoUpdater.autoInstallOnAppQuit = true;
+
+  autoUpdater.on("checking-for-update", () => {
+    updateState.checking = true;
+    updateState.message = "更新を確認しています...";
+    emitAutoUpdateEvent({
+      type: "checking-for-update",
+      message: updateState.message,
+    });
+  });
+
+  autoUpdater.on("update-available", (info) => {
+    updateState.checking = false;
+    updateState.available = true;
+    updateState.downloaded = false;
+    updateState.releaseName = info?.version || info?.releaseName || "";
+    updateState.message = `新しい更新 ${updateState.releaseName || ""} をダウンロードしています...`.trim();
+    emitAutoUpdateEvent({
+      type: "update-available",
+      message: updateState.message,
+      releaseName: updateState.releaseName,
+    });
+  });
+
+  autoUpdater.on("update-not-available", () => {
+    updateState.checking = false;
+    updateState.available = false;
+    updateState.downloaded = false;
+    updateState.releaseName = "";
+    updateState.message = `現在のバージョン ${app.getVersion()} は最新です。`;
+    emitAutoUpdateEvent({
+      type: "update-not-available",
+      message: updateState.message,
+    });
+  });
+
+  autoUpdater.on("download-progress", (progress) => {
+    updateState.available = true;
+    updateState.checking = false;
+    updateState.message = `更新をダウンロード中: ${Math.round(progress.percent || 0)}%`;
+    emitAutoUpdateEvent({
+      type: "download-progress",
+      message: updateState.message,
+      progress: progress.percent || 0,
+    });
+  });
+
+  autoUpdater.on("update-downloaded", (info) => {
+    updateState.checking = false;
+    updateState.available = true;
+    updateState.downloaded = true;
+    updateState.releaseName = info?.version || info?.releaseName || updateState.releaseName;
+    updateState.message = "更新のダウンロードが完了しました。再起動で適用できます。";
+    emitAutoUpdateEvent({
+      type: "update-downloaded",
+      message: updateState.message,
+      releaseName: updateState.releaseName,
+    });
+  });
+
+  autoUpdater.on("error", (error) => {
+    updateState.checking = false;
+    updateState.message = error?.message || "更新中にエラーが発生しました。";
+    emitAutoUpdateEvent({
+      type: "error",
+      message: updateState.message,
+    });
+  });
+}
 
 function isAllowedUrl(targetUrl) {
   try {
@@ -1020,6 +1179,12 @@ function createWindow() {
   });
 
   mainWindow.loadFile(path.join(__dirname, "index.html"));
+  mainWindow.webContents.once("did-finish-load", () => {
+    emitAutoUpdateEvent({
+      type: "status",
+      message: updateState.message,
+    });
+  });
 }
 
 function findWebContentsForTab(tabId) {
@@ -1055,7 +1220,13 @@ app.whenReady().then(() => {
   migrateLegacyStateToFuzitter();
   store = new Store(getStoreFilePath());
   fuzzySession = session.fromPartition(FUZITTER_PARTITION);
+  setupAutoUpdater();
   createWindow();
+  if (updateState.enabled) {
+    setTimeout(() => {
+      void triggerAutoUpdateCheck("startup");
+    }, 1500);
+  }
 
   app.on("web-contents-created", (_appEvent, contents) => {
     if (contents.getType() !== "webview") {
@@ -1297,6 +1468,8 @@ app.on("before-quit", (event) => {
 ipcMain.handle("app:defaults", () => ({
   moodleHome: normalizeMoodleHomeUrl(store.getState().preferences?.moodleHome || WAKAYAMA_MOODLE_HOME),
   dashboardAutoload: Boolean(store.getState().preferences?.dashboardAutoload),
+  appVersion: app.getVersion(),
+  autoUpdate: getAutoUpdateStatus(),
 }));
 
 ipcMain.handle("app:preferences:update", (_event, payload) => {
@@ -1309,6 +1482,30 @@ ipcMain.handle("app:preferences:update", (_event, payload) => {
   return {
     moodleHome: normalizeMoodleHomeUrl(store.getState().preferences?.moodleHome || WAKAYAMA_MOODLE_HOME),
     dashboardAutoload: Boolean(store.getState().preferences?.dashboardAutoload),
+    appVersion: app.getVersion(),
+    autoUpdate: getAutoUpdateStatus(),
+  };
+});
+
+ipcMain.handle("app:update:check", async () => {
+  return triggerAutoUpdateCheck("manual");
+});
+
+ipcMain.handle("app:update:install", () => {
+  if (!updateState.enabled || !updateState.downloaded) {
+    return {
+      ok: false,
+      ...getAutoUpdateStatus(),
+    };
+  }
+
+  setImmediate(() => {
+    autoUpdater.quitAndInstall();
+  });
+
+  return {
+    ok: true,
+    ...getAutoUpdateStatus(),
   };
 });
 
