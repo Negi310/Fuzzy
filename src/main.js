@@ -49,6 +49,7 @@ const updateState = {
 };
 const STARTUP_UPDATE_DOWNLOAD_TIMEOUT_MS = 3 * 60 * 1000;
 const updateLogFilePath = () => path.join(app.getPath("userData"), "updater.log");
+let isStartupUpdateGateRunning = false;
 
 function writeUpdateLog(message, details = null) {
   try {
@@ -146,65 +147,77 @@ async function triggerAutoUpdateCheck(source = "startup") {
   return getAutoUpdateStatus();
 }
 
-function waitForStartupUpdateOutcome(timeoutMs = STARTUP_UPDATE_DOWNLOAD_TIMEOUT_MS) {
-  return new Promise((resolve) => {
-    let settled = false;
-    let timeoutId = null;
-
-    const finalize = (outcome, details = {}) => {
-      if (settled) {
-        return;
-      }
-      settled = true;
-      if (timeoutId) {
-        clearTimeout(timeoutId);
-      }
-      autoUpdater.removeListener("update-not-available", onUpdateNotAvailable);
-      autoUpdater.removeListener("update-downloaded", onUpdateDownloaded);
-      autoUpdater.removeListener("error", onError);
-      resolve({ outcome, ...details });
-    };
-
-    const onUpdateNotAvailable = () => finalize("no-update");
-    const onUpdateDownloaded = (info) => finalize("downloaded", {
-      version: info?.version || "",
-      releaseName: info?.releaseName || "",
-    });
-    const onError = (error) => finalize("error", {
-      error: error?.message || "更新中にエラーが発生しました。",
-    });
-
-    autoUpdater.once("update-not-available", onUpdateNotAvailable);
-    autoUpdater.once("update-downloaded", onUpdateDownloaded);
-    autoUpdater.once("error", onError);
-
-    timeoutId = setTimeout(() => {
-      finalize("timeout");
-    }, timeoutMs);
+function withTimeout(promise, timeoutMs) {
+  return new Promise((resolve, reject) => {
+    const timerId = setTimeout(() => resolve({ timedOut: true }), timeoutMs);
+    Promise.resolve(promise)
+      .then((value) => {
+        clearTimeout(timerId);
+        resolve({ timedOut: false, value });
+      })
+      .catch((error) => {
+        clearTimeout(timerId);
+        reject(error);
+      });
   });
 }
 
 async function runStartupUpdateGate() {
+  isStartupUpdateGateRunning = true;
   if (!updateState.enabled) {
     writeUpdateLog("startup update gate skipped", "updater disabled");
+    isStartupUpdateGateRunning = false;
     return true;
   }
 
-  const outcomePromise = waitForStartupUpdateOutcome();
-  await triggerAutoUpdateCheck("startup");
-  const outcome = await outcomePromise;
-  writeUpdateLog("startup update gate outcome", outcome);
+  writeUpdateLog("startup update gate begin", {
+    version: updateState.currentVersion,
+  });
 
-  if (outcome.outcome === "downloaded") {
+  try {
+    const result = await autoUpdater.checkForUpdates();
+    const downloadPromise = result?.downloadPromise;
+    const hasDownloadPromise = downloadPromise && typeof downloadPromise.then === "function";
+
+    if (!hasDownloadPromise) {
+      writeUpdateLog("startup update gate outcome", { outcome: "no-update" });
+      return true;
+    }
+
+    writeUpdateLog("startup update gate waiting for download", {
+      version: result?.updateInfo?.version || "",
+      releaseName: result?.updateInfo?.releaseName || "",
+    });
+
+    const downloadResult = await withTimeout(downloadPromise, STARTUP_UPDATE_DOWNLOAD_TIMEOUT_MS);
+    if (downloadResult.timedOut) {
+      writeUpdateLog("startup update gate outcome", { outcome: "timeout" });
+      return true;
+    }
+
     updateState.downloaded = true;
     updateState.message = "更新を適用するため再起動します。";
+    writeUpdateLog("startup update gate outcome", {
+      outcome: "downloaded",
+      version: result?.updateInfo?.version || "",
+      releaseName: result?.updateInfo?.releaseName || "",
+    });
     setImmediate(() => {
+      writeUpdateLog("startup update gate quitAndInstall");
       autoUpdater.quitAndInstall();
     });
     return false;
+  } catch (error) {
+    writeUpdateLog("startup update gate outcome", {
+      outcome: "error",
+      message: error?.message || String(error),
+    });
+    updateState.checking = false;
+    updateState.message = error?.message || "更新の確認に失敗しました。";
+    return true;
+  } finally {
+    isStartupUpdateGateRunning = false;
   }
-
-  return true;
 }
 
 function setupAutoUpdater() {
@@ -1542,6 +1555,9 @@ app.whenReady().then(() => {
   });
 
   app.on("activate", () => {
+    if (isStartupUpdateGateRunning) {
+      return;
+    }
     if (BrowserWindow.getAllWindows().length === 0) {
       createWindow();
     }
