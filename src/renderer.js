@@ -35,6 +35,8 @@ const state = {
   tabs: [],
   activeTabId: null,
   draggedTabId: null,
+  tabSlideDrag: null,
+  tabClickSuppressUntil: 0,
   splitView: {
     enabled: false,
     editing: false,
@@ -253,7 +255,8 @@ function renderContextMenuItems(items, level = 0, container = elements.contextMe
       const toggleButton = document.createElement("button");
       toggleButton.type = "button";
       toggleButton.className = "context-menu-toggle";
-      toggleButton.textContent = item.expanded ? "V" : ">";
+      toggleButton.setAttribute("aria-label", item.expanded ? "サブメニューを閉じる" : "サブメニューを開く");
+      toggleButton.setAttribute("aria-expanded", item.expanded ? "true" : "false");
       toggleButton.addEventListener("click", (event) => {
         event.stopPropagation();
         item.expanded = !item.expanded;
@@ -515,6 +518,147 @@ function reorderTabs(sourceTabId, targetTabId, insertAfter = false) {
   tabs.splice(adjustedTargetIndex + (insertAfter ? 1 : 0), 0, moved);
   state.tabs = tabs;
   renderBrowserTabs();
+}
+
+function moveTabToIndex(sourceTabId, targetIndex) {
+  if (!sourceTabId) {
+    return;
+  }
+
+  const tabs = [...state.tabs];
+  const sourceIndex = tabs.findIndex((tab) => tab.id === sourceTabId);
+  if (sourceIndex < 0) {
+    return;
+  }
+
+  const [moved] = tabs.splice(sourceIndex, 1);
+  const boundedTargetIndex = clamp(targetIndex, 0, tabs.length);
+  tabs.splice(boundedTargetIndex, 0, moved);
+  state.tabs = tabs;
+  renderBrowserTabs();
+}
+
+function clearTabSlideDragStyles() {
+  const tabButtons = elements.browserTabStrip.querySelectorAll(".browser-tab[data-tab-id]");
+  for (const button of tabButtons) {
+    button.classList.remove("dragging", "reorder-shift");
+    button.style.transform = "";
+  }
+}
+
+function applyTabSlideDragStyles() {
+  const drag = state.tabSlideDrag;
+  const tabButtons = [...elements.browserTabStrip.querySelectorAll(".browser-tab[data-tab-id]")];
+  clearTabSlideDragStyles();
+
+  if (!drag?.started) {
+    return;
+  }
+
+  const sourceIndex = tabButtons.findIndex((button) => button.dataset.tabId === drag.tabId);
+  if (sourceIndex < 0) {
+    return;
+  }
+
+  const draggedButton = tabButtons[sourceIndex];
+  const draggedRect = draggedButton.getBoundingClientRect();
+  const gap = Number.parseFloat(getComputedStyle(elements.browserTabStrip).gap || "0") || 0;
+  const dragDistance = drag.currentX - drag.startX;
+  const shiftDistance = draggedRect.width + gap;
+
+  draggedButton.classList.add("dragging");
+  draggedButton.style.transform = `translateX(${dragDistance}px)`;
+
+  for (const [index, button] of tabButtons.entries()) {
+    if (index === sourceIndex) {
+      continue;
+    }
+
+    let shift = 0;
+    if (sourceIndex < drag.targetIndex && index > sourceIndex && index <= drag.targetIndex) {
+      shift = -shiftDistance;
+    } else if (sourceIndex > drag.targetIndex && index >= drag.targetIndex && index < sourceIndex) {
+      shift = shiftDistance;
+    }
+
+    if (shift !== 0) {
+      button.classList.add("reorder-shift");
+      button.style.transform = `translateX(${shift}px)`;
+    }
+  }
+}
+
+function beginTabSlideDrag(tabId, pointerId, clientX) {
+  const originIndex = state.tabs.findIndex((tab) => tab.id === tabId);
+  if (originIndex < 0) {
+    return;
+  }
+
+  state.tabSlideDrag = {
+    tabId,
+    pointerId,
+    startX: clientX,
+    currentX: clientX,
+    originIndex,
+    targetIndex: originIndex,
+    started: false,
+  };
+}
+
+function updateTabSlideDrag(clientX) {
+  const drag = state.tabSlideDrag;
+  if (!drag) {
+    return;
+  }
+
+  drag.currentX = clientX;
+  const tabButtons = [...elements.browserTabStrip.querySelectorAll(".browser-tab[data-tab-id]")];
+  const sourceIndex = tabButtons.findIndex((button) => button.dataset.tabId === drag.tabId);
+  if (sourceIndex < 0) {
+    return;
+  }
+
+  const distance = clientX - drag.startX;
+  if (!drag.started && Math.abs(distance) < 8) {
+    return;
+  }
+  drag.started = true;
+
+  const draggedButton = tabButtons[sourceIndex];
+  const draggedRect = draggedButton.getBoundingClientRect();
+  const draggedCenter = draggedRect.left + draggedRect.width / 2 + distance;
+  const otherButtons = tabButtons.filter((button) => button.dataset.tabId !== drag.tabId);
+
+  let targetIndex = 0;
+  for (const button of otherButtons) {
+    const rect = button.getBoundingClientRect();
+    const midpoint = rect.left + rect.width / 2;
+    if (draggedCenter > midpoint) {
+      targetIndex += 1;
+    }
+  }
+
+  drag.targetIndex = clamp(targetIndex, 0, tabButtons.length - 1);
+  applyTabSlideDragStyles();
+}
+
+function finishTabSlideDrag(pointerId = null) {
+  const drag = state.tabSlideDrag;
+  if (!drag || (pointerId !== null && drag.pointerId !== pointerId)) {
+    return;
+  }
+
+  const shouldReorder = drag.started && drag.targetIndex !== drag.originIndex;
+  clearTabSlideDragStyles();
+  state.tabSlideDrag = null;
+
+  if (drag.started) {
+    state.tabClickSuppressUntil = Date.now() + 220;
+  }
+
+  if (shouldReorder) {
+    moveTabToIndex(drag.tabId, drag.targetIndex);
+  }
 }
 
 function renderBrowserLayout() {
@@ -1801,18 +1945,18 @@ function renderBrowserTabs() {
     button.type = "button";
     button.className = `browser-tab ${tab.id === state.activeTabId ? "active" : ""}`;
     button.dataset.tabId = tab.id;
-    button.draggable = false;
     button.innerHTML = `
       <span class="tab-dot ${getTabColor(tab.kind)}"></span>
       <span class="tab-title">${escapeHtml(tab.title || UI_TEXT.defaultBrowserTitle)}</span>
       <span class="tab-close" data-close-tab="${tab.id}">×</span>
     `;
-    button.addEventListener("mousedown", (event) => {
+    button.addEventListener("pointerdown", (event) => {
       const closeTarget = closestFromEventTarget(event.target, "[data-close-tab]");
-      button.draggable = event.button === 0 && !closeTarget;
-    });
-    button.addEventListener("mouseup", () => {
-      button.draggable = false;
+      if (event.button !== 0 || closeTarget) {
+        return;
+      }
+      button.setPointerCapture(event.pointerId);
+      beginTabSlideDrag(tab.id, event.pointerId, event.clientX);
     });
     button.addEventListener("auxclick", (event) => {
       if (event.button !== 1) {
@@ -1822,34 +1966,9 @@ function renderBrowserTabs() {
       event.stopPropagation();
       toggleSplitEditMode();
     });
-    button.addEventListener("dragstart", (event) => {
-      if (!button.draggable) {
-        event.preventDefault();
-        return;
-      }
-      state.draggedTabId = tab.id;
-      event.dataTransfer.effectAllowed = "move";
-      event.dataTransfer.setData("text/plain", tab.id);
-    });
-    button.addEventListener("dragend", () => {
-      state.draggedTabId = null;
-      button.draggable = false;
-    });
-    button.addEventListener("dragover", (event) => {
-      event.preventDefault();
-      event.dataTransfer.dropEffect = "move";
-    });
-    button.addEventListener("drop", (event) => {
-      event.preventDefault();
-      const sourceTabId = state.draggedTabId || event.dataTransfer.getData("text/plain");
-      const rect = button.getBoundingClientRect();
-      const insertAfter = event.clientX > rect.left + rect.width / 2;
-      reorderTabs(sourceTabId, tab.id, insertAfter);
-    });
     button.addEventListener("contextmenu", (event) => {
       event.preventDefault();
       event.stopPropagation();
-      button.draggable = false;
       const items = [
         ...(tab.id !== state.activeTabId ? [{
           label: "右に分割表示",
@@ -1878,6 +1997,7 @@ function renderBrowserTabs() {
   addButton.dataset.addTab = "true";
   addButton.innerHTML = `<span class="tab-title">＋</span>`;
   elements.browserTabStrip.appendChild(addButton);
+  applyTabSlideDragStyles();
 }
 
 function activateTab(tabId, options = {}) {
@@ -2258,8 +2378,9 @@ function absorbWheelEvent(event) {
 }
 
 function wireEvents() {
-  elements.browserSplitter.addEventListener("mousedown", (event) => {
+  elements.browserSplitter.addEventListener("pointerdown", (event) => {
     event.preventDefault();
+    elements.browserSplitter.setPointerCapture(event.pointerId);
     const onMove = (moveEvent) => {
       const bounds = elements.browserContent.getBoundingClientRect();
       const nextRatio = (moveEvent.clientX - bounds.left) / Math.max(bounds.width, 1);
@@ -2267,11 +2388,25 @@ function wireEvents() {
       renderBrowserLayout();
     };
     const onUp = () => {
-      window.removeEventListener("mousemove", onMove);
-      window.removeEventListener("mouseup", onUp);
+      elements.browserSplitter.removeEventListener("pointermove", onMove);
+      elements.browserSplitter.removeEventListener("pointerup", onUp);
+      elements.browserSplitter.removeEventListener("pointercancel", onUp);
     };
-    window.addEventListener("mousemove", onMove);
-    window.addEventListener("mouseup", onUp);
+    elements.browserSplitter.addEventListener("pointermove", onMove);
+    elements.browserSplitter.addEventListener("pointerup", onUp);
+    elements.browserSplitter.addEventListener("pointercancel", onUp);
+  });
+
+  document.addEventListener("pointermove", (event) => {
+    if (state.tabSlideDrag?.pointerId === event.pointerId) {
+      updateTabSlideDrag(event.clientX);
+    }
+  });
+  document.addEventListener("pointerup", (event) => {
+    finishTabSlideDrag(event.pointerId);
+  });
+  document.addEventListener("pointercancel", (event) => {
+    finishTabSlideDrag(event.pointerId);
   });
 
   elements.contextMenuBackdrop.addEventListener("mousedown", hideContextMenu);
@@ -2372,6 +2507,11 @@ function wireEvents() {
   });
 
   elements.browserTabStrip.addEventListener("click", (event) => {
+    if (Date.now() < state.tabClickSuppressUntil) {
+      event.preventDefault();
+      event.stopPropagation();
+      return;
+    }
     const closeTarget = event.target.closest("[data-close-tab]");
     if (closeTarget) {
       closeTab(closeTarget.dataset.closeTab);

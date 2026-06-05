@@ -12,14 +12,14 @@
         <section class="browser-workspace">
           <div id="browser-tab-strip" class="browser-tab-strip"></div>
           <div class="browser-toolbar">
-            <button type="button" class="icon-button" data-action="back" title="戻る">←</button>
-            <button type="button" class="icon-button" data-action="forward" title="進む">→</button>
-            <button type="button" class="icon-button" data-action="reload" title="再読み込み">⟳</button>
+            <button type="button" class="icon-button" data-action="back" data-icon="back" title="戻る" aria-label="戻る"></button>
+            <button type="button" class="icon-button" data-action="forward" data-icon="forward" title="進む" aria-label="進む"></button>
+            <button type="button" class="icon-button" data-action="reload" data-icon="refresh" title="再読み込み" aria-label="再読み込み"></button>
             <div class="address-shell">
-              <span class="address-icon">⌂</span>
+              <span class="address-icon" aria-hidden="true"></span>
               <input id="address-input" class="address-input" type="text" autocomplete="off" />
-              <button type="button" class="address-button" data-action="favorite" title="お気に入り">☆</button>
-              <button type="button" class="address-button" data-action="menu" title="メニュー">⚙</button>
+              <button type="button" class="address-button" data-action="favorite" data-icon="favorite" title="お気に入り" aria-label="お気に入り"></button>
+              <button type="button" class="address-button" data-action="menu" data-icon="menu" title="メニュー" aria-label="メニュー"></button>
             </div>
           </div>
           <div id="browser-content" class="browser-content">
@@ -33,8 +33,8 @@
               <button id="side-tab-explorer" type="button" class="side-tab-button active">エクスプローラー</button>
               <button id="side-tab-timeline" type="button" class="side-tab-button">タイムライン</button>
               <div class="side-panel-tab-actions">
-                <button id="panel-refresh-button" type="button" class="icon-button" title="更新">⟳</button>
-                <button id="open-settings-button" type="button" class="icon-button" title="設定">⚙</button>
+                <button id="panel-refresh-button" type="button" class="icon-button" data-icon="refresh" title="更新" aria-label="更新"></button>
+                <button id="open-settings-button" type="button" class="icon-button" data-icon="settings" title="設定" aria-label="設定"></button>
               </div>
               <button id="hide-side-panel-button" type="button" class="panel-close-button" title="右パネルを閉じる">×</button>
             </div>
@@ -77,7 +77,7 @@
       </main>
 
       <div class="panel-dock">
-        <button id="dock-toggle-button" type="button" class="dock-toggle-button" title="右パネルの表示切替">≡</button>
+        <button id="dock-toggle-button" type="button" class="dock-toggle-button" data-icon="panel" title="右パネルの表示切替" aria-label="右パネルの表示切替"></button>
       </div>
 
       <dialog id="settings-dialog" class="settings-dialog">
