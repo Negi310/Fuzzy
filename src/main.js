@@ -47,6 +47,19 @@ const updateState = {
   message: "",
   releaseName: "",
 };
+const updateLogFilePath = () => path.join(app.getPath("userData"), "updater.log");
+
+function writeUpdateLog(message, details = null) {
+  try {
+    const timestamp = new Date().toISOString();
+    const serializedDetails = details == null
+      ? ""
+      : ` ${typeof details === "string" ? details : JSON.stringify(details)}`;
+    fs.appendFileSync(updateLogFilePath(), `[${timestamp}] ${message}${serializedDetails}\n`, "utf8");
+  } catch (_error) {
+    // Ignore logging failures so update flow remains unaffected.
+  }
+}
 
 process.on("uncaughtException", (error) => {
   if (error?.code === "EPIPE") {
@@ -87,6 +100,13 @@ function canUseAutoUpdater() {
 }
 
 async function triggerAutoUpdateCheck(source = "startup") {
+  writeUpdateLog("triggerAutoUpdateCheck called", {
+    source,
+    enabled: updateState.enabled,
+    checking: updateState.checking,
+    currentVersion: updateState.currentVersion,
+  });
+
   if (!updateState.enabled) {
     updateState.message = "自動更新はインストール版でのみ利用できます。";
     emitAutoUpdateEvent({
@@ -112,6 +132,7 @@ async function triggerAutoUpdateCheck(source = "startup") {
   try {
     await autoUpdater.checkForUpdates();
   } catch (error) {
+    writeUpdateLog("checkForUpdates failed", error?.stack || error?.message || String(error));
     updateState.checking = false;
     updateState.message = error.message || "更新の確認に失敗しました。";
     emitAutoUpdateEvent({
@@ -127,6 +148,11 @@ async function triggerAutoUpdateCheck(source = "startup") {
 function setupAutoUpdater() {
   updateState.enabled = canUseAutoUpdater();
   updateState.currentVersion = app.getVersion();
+  writeUpdateLog("setupAutoUpdater", {
+    enabled: updateState.enabled,
+    version: updateState.currentVersion,
+    execPath: process.execPath,
+  });
 
   if (!updateState.enabled) {
     updateState.message = "自動更新はインストール版でのみ利用できます。";
@@ -137,6 +163,7 @@ function setupAutoUpdater() {
   autoUpdater.autoInstallOnAppQuit = true;
 
   autoUpdater.on("checking-for-update", () => {
+    writeUpdateLog("autoUpdater event", "checking-for-update");
     updateState.checking = true;
     updateState.message = "更新を確認しています...";
     emitAutoUpdateEvent({
@@ -146,6 +173,11 @@ function setupAutoUpdater() {
   });
 
   autoUpdater.on("update-available", (info) => {
+    writeUpdateLog("autoUpdater event", {
+      type: "update-available",
+      version: info?.version,
+      releaseName: info?.releaseName,
+    });
     updateState.checking = false;
     updateState.available = true;
     updateState.downloaded = false;
@@ -159,6 +191,7 @@ function setupAutoUpdater() {
   });
 
   autoUpdater.on("update-not-available", () => {
+    writeUpdateLog("autoUpdater event", "update-not-available");
     updateState.checking = false;
     updateState.available = false;
     updateState.downloaded = false;
@@ -171,6 +204,12 @@ function setupAutoUpdater() {
   });
 
   autoUpdater.on("download-progress", (progress) => {
+    writeUpdateLog("autoUpdater event", {
+      type: "download-progress",
+      percent: progress.percent || 0,
+      transferred: progress.transferred || 0,
+      total: progress.total || 0,
+    });
     updateState.available = true;
     updateState.checking = false;
     updateState.message = `更新をダウンロード中: ${Math.round(progress.percent || 0)}%`;
@@ -182,6 +221,11 @@ function setupAutoUpdater() {
   });
 
   autoUpdater.on("update-downloaded", (info) => {
+    writeUpdateLog("autoUpdater event", {
+      type: "update-downloaded",
+      version: info?.version,
+      releaseName: info?.releaseName,
+    });
     updateState.checking = false;
     updateState.available = true;
     updateState.downloaded = true;
@@ -195,6 +239,11 @@ function setupAutoUpdater() {
   });
 
   autoUpdater.on("error", (error) => {
+    writeUpdateLog("autoUpdater event", {
+      type: "error",
+      message: error?.message || "",
+      stack: error?.stack || "",
+    });
     updateState.checking = false;
     updateState.message = error?.message || "更新中にエラーが発生しました。";
     emitAutoUpdateEvent({
