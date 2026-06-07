@@ -48,7 +48,9 @@ const updateState = {
   releaseName: "",
 };
 const STARTUP_UPDATE_DOWNLOAD_TIMEOUT_MS = 3 * 60 * 1000;
+const UPDATE_SESSION_SNAPSHOT_TTL_MS = 15 * 60 * 1000;
 const updateLogFilePath = () => path.join(app.getPath("userData"), "updater.log");
+const updateSessionSnapshotPath = () => path.join(app.getPath("userData"), "update-session-snapshot.json");
 let isStartupUpdateGateRunning = false;
 
 function writeUpdateLog(message, details = null) {
@@ -60,6 +62,89 @@ function writeUpdateLog(message, details = null) {
     fs.appendFileSync(updateLogFilePath(), `[${timestamp}] ${message}${serializedDetails}\n`, "utf8");
   } catch (_error) {
     // Ignore logging failures so update flow remains unaffected.
+  }
+}
+
+function buildCookieUrl(cookie) {
+  const domain = String(cookie?.domain || "").replace(/^\./, "");
+  if (!domain) {
+    return "";
+  }
+  const protocol = cookie?.secure ? "https" : "http";
+  const cookiePath = String(cookie?.path || "/").startsWith("/") ? String(cookie?.path || "/") : `/${cookie?.path || ""}`;
+  return `${protocol}://${domain}${cookiePath}`;
+}
+
+async function snapshotSessionForUpdateRelaunch() {
+  if (!fuzzySession) {
+    return;
+  }
+
+  await flushPersistentSession();
+  const cookies = await fuzzySession.cookies.get({});
+  const serializableCookies = cookies
+    .map((cookie) => {
+      const url = buildCookieUrl(cookie);
+      if (!url || !cookie?.name) {
+        return null;
+      }
+      return {
+        url,
+        name: cookie.name,
+        value: cookie.value,
+        domain: cookie.domain,
+        path: cookie.path,
+        secure: cookie.secure,
+        httpOnly: cookie.httpOnly,
+        sameSite: cookie.sameSite,
+        expirationDate: cookie.session ? undefined : cookie.expirationDate,
+      };
+    })
+    .filter(Boolean);
+
+  fs.writeFileSync(updateSessionSnapshotPath(), JSON.stringify({
+    createdAt: Date.now(),
+    cookies: serializableCookies,
+  }, null, 2), "utf8");
+  writeUpdateLog("update session snapshot saved", {
+    cookieCount: serializableCookies.length,
+  });
+}
+
+async function restoreSessionAfterUpdateRelaunch() {
+  if (!fuzzySession || !fs.existsSync(updateSessionSnapshotPath())) {
+    return;
+  }
+
+  try {
+    const snapshot = JSON.parse(fs.readFileSync(updateSessionSnapshotPath(), "utf8"));
+    const createdAt = Number(snapshot?.createdAt || 0);
+    const cookies = Array.isArray(snapshot?.cookies) ? snapshot.cookies : [];
+    if (!createdAt || (Date.now() - createdAt) > UPDATE_SESSION_SNAPSHOT_TTL_MS) {
+      fs.rmSync(updateSessionSnapshotPath(), { force: true });
+      writeUpdateLog("update session snapshot skipped", { reason: "expired" });
+      return;
+    }
+
+    for (const cookie of cookies) {
+      try {
+        await fuzzySession.cookies.set(cookie);
+      } catch (error) {
+        writeUpdateLog("update session cookie restore failed", {
+          name: cookie?.name || "",
+          message: error?.message || String(error),
+        });
+      }
+    }
+
+    await flushPersistentSession();
+    fs.rmSync(updateSessionSnapshotPath(), { force: true });
+    writeUpdateLog("update session snapshot restored", {
+      cookieCount: cookies.length,
+    });
+  } catch (error) {
+    fs.rmSync(updateSessionSnapshotPath(), { force: true });
+    writeUpdateLog("update session snapshot restore failed", error?.message || String(error));
   }
 }
 
@@ -162,13 +247,17 @@ function withTimeout(promise, timeoutMs) {
   });
 }
 
-function installDownloadedUpdate(reason = "manual") {
+async function installDownloadedUpdate(reason = "manual") {
   writeUpdateLog("quitAndInstall requested", { reason });
-  setImmediate(() => {
-    // Use silent NSIS install so startup updates can finish before the first
-    // window appears, then relaunch the app once the new version is installed.
-    autoUpdater.quitAndInstall(true, true);
-  });
+  try {
+    await snapshotSessionForUpdateRelaunch();
+  } catch (error) {
+    writeUpdateLog("update session snapshot failed", error?.message || String(error));
+  }
+
+  // Use silent NSIS install so startup updates can finish before the first
+  // window appears, then relaunch the app once the new version is installed.
+  autoUpdater.quitAndInstall(true, true);
 }
 
 async function runStartupUpdateGate() {
@@ -211,7 +300,7 @@ async function runStartupUpdateGate() {
       version: result?.updateInfo?.version || "",
       releaseName: result?.updateInfo?.releaseName || "",
     });
-    installDownloadedUpdate("startup-gate");
+    await installDownloadedUpdate("startup-gate");
     return false;
   } catch (error) {
     writeUpdateLog("startup update gate outcome", {
@@ -1573,6 +1662,7 @@ app.whenReady().then(() => {
   });
 
   void (async () => {
+    await restoreSessionAfterUpdateRelaunch();
     const shouldLaunchWindow = await runStartupUpdateGate();
     if (shouldLaunchWindow) {
       createWindow();
@@ -1636,7 +1726,7 @@ ipcMain.handle("app:update:install", () => {
     };
   }
 
-  installDownloadedUpdate("manual-install");
+  void installDownloadedUpdate("manual-install");
 
   return {
     ok: true,
