@@ -51,6 +51,7 @@ const state = {
   pendingMappingCourse: null,
   mappingPromptedCourses: new Set(),
   downloadDraft: null,
+  renameDraft: null,
   contextMenu: null,
   timelineStatus: {
     state: "idle",
@@ -100,6 +101,9 @@ const elements = {
   downloadFileNameInput: document.querySelector("#download-file-name"),
   downloadChooseFolderButton: document.querySelector("#download-choose-folder-button"),
   downloadSaveButton: document.querySelector("#download-save-button"),
+  renameDialog: document.querySelector("#rename-dialog"),
+  renameFileNameInput: document.querySelector("#rename-file-name"),
+  renameSaveButton: document.querySelector("#rename-save-button"),
   contextMenuBackdrop: document.querySelector("#context-menu-backdrop"),
   contextMenu: document.querySelector("#context-menu"),
 };
@@ -1776,17 +1780,14 @@ async function duplicateExplorerEntry(entry) {
   toast(`${entry.name} をコピーしました`, "success");
 }
 
-async function renameExplorerEntry(entry) {
-  const nextName = window.prompt("新しい名前を入力してください", entry.name);
-  if (!nextName || nextName === entry.name) {
-    return;
-  }
-  await window.fuzzyApi.renameExplorerEntry({
-    targetPath: entry.path,
-    nextName,
+function showRenameDialog(entry) {
+  state.renameDraft = entry;
+  elements.renameFileNameInput.value = entry.name;
+  elements.renameDialog.showModal();
+  requestAnimationFrame(() => {
+    elements.renameFileNameInput.focus();
+    elements.renameFileNameInput.select();
   });
-  await loadDirectory(state.currentDir || state.rootDir, { syncBrowserFromDirectory: false });
-  toast(`${entry.name} の名前を変更しました`, "success");
 }
 
 async function deleteExplorerEntry(entry) {
@@ -1822,7 +1823,7 @@ function openExplorerEntryMenu(entry, x, y) {
     });
     items.push({
       label: "Rename",
-      action: async () => renameExplorerEntry(entry),
+      action: async () => showRenameDialog(entry),
     });
     items.push({
       label: "削除",
@@ -2365,6 +2366,10 @@ async function showDownloadDialog(payload, tab, options = {}) {
   elements.downloadFolderLabel.textContent = state.downloadDraft.folderPath;
   elements.downloadFileNameInput.value = state.downloadDraft.fileName;
   elements.downloadDialog.showModal();
+  requestAnimationFrame(() => {
+    elements.downloadFileNameInput.focus();
+    elements.downloadFileNameInput.select();
+  });
 }
 
 function setupDashboardWebview() {
@@ -2754,6 +2759,43 @@ function wireEvents() {
       lessonFolder: state.downloadDraft.lessonFolder || "",
     });
     elements.downloadDialog.close();
+  });
+  elements.downloadDialog.addEventListener("close", () => {
+    state.downloadDraft = null;
+  });
+  elements.renameSaveButton.addEventListener("click", async () => {
+    if (!state.renameDraft) {
+      return;
+    }
+
+    const nextName = elements.renameFileNameInput.value.trim();
+    if (!nextName || nextName === state.renameDraft.name) {
+      elements.renameDialog.close();
+      return;
+    }
+
+    const previousName = state.renameDraft.name;
+    await window.fuzzyApi.renameExplorerEntry({
+      targetPath: state.renameDraft.path,
+      nextName,
+    });
+    elements.renameDialog.close();
+    await loadDirectory(state.currentDir || state.rootDir, { syncBrowserFromDirectory: false });
+    toast(`${previousName} の名前を変更しました`, "success");
+  });
+  elements.renameDialog.addEventListener("close", () => {
+    state.renameDraft = null;
+  });
+  elements.renameDialog.addEventListener("click", (event) => {
+    if (event.target === elements.renameDialog) {
+      elements.renameDialog.close();
+    }
+  });
+  elements.renameFileNameInput.addEventListener("keydown", (event) => {
+    if (event.key === "Enter") {
+      event.preventDefault();
+      elements.renameSaveButton.click();
+    }
   });
 
   window.addEventListener("resize", positionDockToggle);

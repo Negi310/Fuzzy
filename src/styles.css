@@ -253,7 +253,6 @@ button {
 
 .icon-button,
 .address-button,
-.dock-toggle-button,
 .context-menu-toggle {
   font-size: 0;
 }
@@ -270,8 +269,6 @@ button {
 .address-button::after,
 .address-icon::before,
 .address-icon::after,
-.dock-toggle-button::before,
-.dock-toggle-button::after,
 .context-menu-toggle::before,
 .context-menu-toggle::after {
   content: "";
@@ -396,28 +393,6 @@ button {
   display: none;
 }
 
-.dock-toggle-button {
-  position: relative;
-}
-
-.dock-toggle-button[data-icon="panel"]::before {
-  width: var(--toolbar-icon-size);
-  height: var(--toolbar-icon-size);
-  background: currentColor;
-  -webkit-mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Crect x='4' y='4' width='16' height='16' rx='2' fill='none' stroke='black' stroke-width='1.85'/%3E%3Cpath d='M14 4v16' fill='none' stroke='black' stroke-width='1.85'/%3E%3C/svg%3E");
-  mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Crect x='4' y='4' width='16' height='16' rx='2' fill='none' stroke='black' stroke-width='1.85'/%3E%3Cpath d='M14 4v16' fill='none' stroke='black' stroke-width='1.85'/%3E%3C/svg%3E");
-  -webkit-mask-repeat: no-repeat;
-  mask-repeat: no-repeat;
-  -webkit-mask-position: center;
-  mask-position: center;
-  -webkit-mask-size: contain;
-  mask-size: contain;
-}
-
-.dock-toggle-button[data-icon="panel"]::after {
-  display: none;
-}
-
 .address-button:hover,
 .icon-button:hover,
 .secondary-button:hover,
@@ -530,6 +505,10 @@ button {
   background: transparent;
   color: #68788f;
   cursor: pointer;
+  font-size: 20px;
+  line-height: 1;
+  display: grid;
+  place-items: center;
 }
 
 .panel-view {
@@ -884,9 +863,12 @@ button {
   box-shadow: 0 10px 22px rgba(19, 39, 67, 0.14);
   cursor: pointer;
   color: #4c5d76;
-  font-size: 18px;
+  font-size: 22px;
   font-weight: 600;
+  line-height: 1;
   transition: border-radius 180ms ease, border-left-color 180ms ease, border-right-color 180ms ease;
+  display: grid;
+  place-items: center;
 }
 
 .dock-toggle-button.panel-open {
