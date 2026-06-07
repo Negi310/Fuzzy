@@ -162,6 +162,15 @@ function withTimeout(promise, timeoutMs) {
   });
 }
 
+function installDownloadedUpdate(reason = "manual") {
+  writeUpdateLog("quitAndInstall requested", { reason });
+  setImmediate(() => {
+    // Use silent NSIS install so startup updates can finish before the first
+    // window appears, then relaunch the app once the new version is installed.
+    autoUpdater.quitAndInstall(true, true);
+  });
+}
+
 async function runStartupUpdateGate() {
   isStartupUpdateGateRunning = true;
   if (!updateState.enabled) {
@@ -202,10 +211,7 @@ async function runStartupUpdateGate() {
       version: result?.updateInfo?.version || "",
       releaseName: result?.updateInfo?.releaseName || "",
     });
-    setImmediate(() => {
-      writeUpdateLog("startup update gate quitAndInstall");
-      autoUpdater.quitAndInstall();
-    });
+    installDownloadedUpdate("startup-gate");
     return false;
   } catch (error) {
     writeUpdateLog("startup update gate outcome", {
@@ -1630,9 +1636,7 @@ ipcMain.handle("app:update:install", () => {
     };
   }
 
-  setImmediate(() => {
-    autoUpdater.quitAndInstall();
-  });
+  installDownloadedUpdate("manual-install");
 
   return {
     ok: true,
