@@ -584,9 +584,25 @@ button {
 
 .path-text {
   display: flex;
+  flex: 1 1 auto;
   flex-wrap: wrap;
   align-items: center;
   gap: 4px;
+}
+
+.path-root-button {
+  flex: 0 0 auto;
+  padding: 4px 10px;
+  border: 1px solid #d3deea;
+  border-radius: 999px;
+  background: #f4f8fc;
+  color: #36506f;
+  font: inherit;
+}
+
+.path-root-button:hover {
+  background: #e8f1ff;
+  color: #174a96;
 }
 
 .path-segment {
@@ -671,6 +687,16 @@ button {
 
 .file-row:hover {
   background: #f7faff;
+}
+
+.file-row.selected {
+  background: #e8f1ff;
+  box-shadow: inset 0 0 0 1px #9dbcf4;
+}
+
+.file-row.drop-target {
+  background: #dff4e7;
+  box-shadow: inset 0 0 0 1px #6eb58a;
 }
 
 .file-row:last-child {

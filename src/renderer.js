@@ -30,6 +30,7 @@ const state = {
   dashboardUrl: "https://moodle2026.wakayama-u.ac.jp/2026/my/",
   rootDir: "",
   currentDir: "",
+  explorerEntries: [],
   mappings: [],
   timelineEntries: [],
   tabs: [],
@@ -50,6 +51,10 @@ const state = {
   dashboardAutoload: false,
   pendingMappingCourse: null,
   mappingPromptedCourses: new Set(),
+  selectedExplorerPaths: new Set(),
+  explorerSelectionAnchorPath: "",
+  draggedExplorerPaths: [],
+  explorerDropTargetPath: "",
   downloadDraft: null,
   renameDraft: null,
   contextMenu: null,
@@ -63,6 +68,7 @@ const state = {
     currentVersion: "",
     message: "",
   },
+  dialogFocusLock: false,
 };
 
 const elements = {
@@ -72,6 +78,7 @@ const elements = {
   addressInput: document.querySelector("#address-input"),
   activeCourseLabel: document.querySelector("#active-course-label"),
   currentDirLabel: document.querySelector("#current-dir-label"),
+  goRootFolderButton: document.querySelector("#go-root-folder-button"),
   rootDirLabel: document.querySelector("#root-dir-label"),
   moodleHomeInput: document.querySelector("#moodle-home-input"),
   saveMoodleHomeButton: document.querySelector("#save-moodle-home-button"),
@@ -996,6 +1003,9 @@ function syncAddressBar() {
 }
 
 function focusBrowserSurface(tab) {
+  if (state.dialogFocusLock) {
+    return;
+  }
   if (!tab?.webviewEl || tab.kind !== "browser") {
     return;
   }
@@ -1403,6 +1413,120 @@ function findMappingForPath(targetPath) {
   return matches.sort((left, right) => right.folderPath.length - left.folderPath.length)[0];
 }
 
+function findExplorerEntryByPath(targetPath) {
+  return state.explorerEntries.find((entry) => entry.path === targetPath) || null;
+}
+
+function getSelectedExplorerEntries() {
+  return state.explorerEntries.filter((entry) => state.selectedExplorerPaths.has(entry.path));
+}
+
+function syncExplorerSelection() {
+  const validPaths = new Set(state.explorerEntries.map((entry) => entry.path));
+  state.selectedExplorerPaths = new Set(
+    [...state.selectedExplorerPaths].filter((entryPath) => validPaths.has(entryPath))
+  );
+  if (state.explorerSelectionAnchorPath && !validPaths.has(state.explorerSelectionAnchorPath)) {
+    state.explorerSelectionAnchorPath = "";
+  }
+  if (state.explorerDropTargetPath && !validPaths.has(state.explorerDropTargetPath)) {
+    state.explorerDropTargetPath = "";
+  }
+}
+
+function setExplorerSelection(paths, anchorPath = "") {
+  state.selectedExplorerPaths = new Set(paths.filter(Boolean));
+  state.explorerSelectionAnchorPath = anchorPath || paths.at(-1) || "";
+}
+
+function renderExplorerSelectionState() {
+  elements.fileList.querySelectorAll(".file-row").forEach((row) => {
+    const entryPath = row.dataset.entryPath || "";
+    row.classList.toggle("selected", state.selectedExplorerPaths.has(entryPath));
+  });
+}
+
+function renderExplorerDropTargetState() {
+  elements.fileList.querySelectorAll(".file-row").forEach((row) => {
+    const entryPath = row.dataset.entryPath || "";
+    row.classList.toggle("drop-target", state.explorerDropTargetPath === entryPath);
+  });
+}
+
+function toggleExplorerSelection(pathValue) {
+  const nextSelection = new Set(state.selectedExplorerPaths);
+  if (nextSelection.has(pathValue)) {
+    nextSelection.delete(pathValue);
+  } else {
+    nextSelection.add(pathValue);
+  }
+  state.selectedExplorerPaths = nextSelection;
+  state.explorerSelectionAnchorPath = pathValue;
+}
+
+function buildExplorerRangeSelection(targetPath, preserveExisting = false) {
+  const paths = state.explorerEntries.map((entry) => entry.path);
+  const anchorPath = state.explorerSelectionAnchorPath || targetPath;
+  const startIndex = paths.indexOf(anchorPath);
+  const endIndex = paths.indexOf(targetPath);
+  if (startIndex < 0 || endIndex < 0) {
+    return [targetPath];
+  }
+
+  const [fromIndex, toIndex] = startIndex < endIndex
+    ? [startIndex, endIndex]
+    : [endIndex, startIndex];
+  const rangePaths = paths.slice(fromIndex, toIndex + 1);
+  if (!preserveExisting) {
+    return rangePaths;
+  }
+  return [...new Set([...state.selectedExplorerPaths, ...rangePaths])];
+}
+
+function handleExplorerSelection(entry, event = {}) {
+  if (event.shiftKey) {
+    const preserveExisting = Boolean(event.ctrlKey || event.metaKey);
+    setExplorerSelection(buildExplorerRangeSelection(entry.path, preserveExisting), state.explorerSelectionAnchorPath || entry.path);
+    return;
+  }
+  if (event.ctrlKey || event.metaKey) {
+    toggleExplorerSelection(entry.path);
+    return;
+  }
+  setExplorerSelection([entry.path], entry.path);
+}
+
+async function deleteExplorerEntries(entries) {
+  const uniqueEntries = [...new Map(entries.map((entry) => [entry.path, entry])).values()];
+  if (!uniqueEntries.length) {
+    return;
+  }
+
+  const confirmed = window.confirm(
+    uniqueEntries.length === 1
+      ? `${uniqueEntries[0].name} を削除しますか？`
+      : `${uniqueEntries.length} 件の項目を削除しますか？`
+  );
+  if (!confirmed) {
+    return;
+  }
+
+  if (uniqueEntries.length === 1) {
+    await window.fuzzyApi.deleteExplorerEntry(uniqueEntries[0].path);
+  } else {
+    await window.fuzzyApi.deleteExplorerEntries(uniqueEntries.map((entry) => entry.path));
+  }
+
+  setExplorerSelection([], "");
+  await loadDirectory(state.currentDir || state.rootDir, { syncBrowserFromDirectory: false });
+  toast(
+    uniqueEntries.length === 1
+      ? `${uniqueEntries[0].name} を削除しました`
+      : `${uniqueEntries.length} 件を削除しました`,
+    "success"
+  );
+}
+
 async function ensureCourseMapping(tab) {
   if (
     !tab?.courseName ||
@@ -1808,6 +1932,10 @@ function focusDialogInput(input, { select = false, selectFileStem = false } = {}
   setTimeout(tryFocus, 180);
 }
 
+function setDialogFocusLock(locked) {
+  state.dialogFocusLock = Boolean(locked);
+}
+
 function isImeComposing(event) {
   return Boolean(event?.isComposing || event?.keyCode === 229 || event?.currentTarget?.dataset?.imeComposing === "true");
 }
@@ -1840,6 +1968,7 @@ async function duplicateExplorerEntry(entry) {
 
 function showRenameDialog(entry) {
   state.renameDraft = entry;
+  setDialogFocusLock(true);
   elements.renameFileNameInput.value = entry.name;
   elements.renameCurrentName.textContent = `現在の名前: ${entry.name}`;
   elements.renameDialog.showModal();
@@ -1847,13 +1976,7 @@ function showRenameDialog(entry) {
 }
 
 async function deleteExplorerEntry(entry) {
-  const confirmed = window.confirm(`${entry.name} を削除しますか？`);
-  if (!confirmed) {
-    return;
-  }
-  await window.fuzzyApi.deleteExplorerEntry(entry.path);
-  await loadDirectory(state.currentDir || state.rootDir, { syncBrowserFromDirectory: false });
-  toast(`${entry.name} を削除しました`, "success");
+  await deleteExplorerEntries([entry]);
 }
 
 function openExplorerBackgroundMenu(x, y) {
@@ -1865,6 +1988,17 @@ function openExplorerBackgroundMenu(x, y) {
 }
 
 function openExplorerEntryMenu(entry, x, y) {
+  if (state.selectedExplorerPaths.size > 1 && state.selectedExplorerPaths.has(entry.path)) {
+    showContextMenu([
+      {
+        label: "削除",
+        tone: "danger",
+        action: async () => deleteExplorerEntries(getSelectedExplorerEntries()),
+      },
+    ], x, y);
+    return;
+  }
+
   const items = [];
   if (entry.isDirectory) {
     items.push({
@@ -2110,8 +2244,10 @@ async function updateCurrentCourse(tab) {
 }
 
 function renderDirectory(entries) {
+  state.explorerEntries = Array.isArray(entries) ? entries : [];
+  syncExplorerSelection();
   elements.fileList.innerHTML = "";
-  if (!entries.length) {
+  if (!state.explorerEntries.length) {
     const empty = document.createElement("div");
     empty.className = "empty-state";
     empty.textContent = UI_TEXT.emptyFiles;
@@ -2119,13 +2255,16 @@ function renderDirectory(entries) {
     return;
   }
 
-  for (const entry of entries) {
+  for (const entry of state.explorerEntries) {
     const icon = getExplorerFileIcon(entry);
     const row = document.createElement("button");
     row.type = "button";
-    row.className = "file-row";
+    const isSelected = state.selectedExplorerPaths.has(entry.path);
+    const isDropTarget = state.explorerDropTargetPath === entry.path;
+    row.className = `file-row ${isSelected ? "selected" : ""} ${isDropTarget ? "drop-target" : ""}`.trim();
     row.draggable = true;
     row.title = entry.name;
+    row.dataset.entryPath = entry.path;
     row.innerHTML = `
       <span class="file-name-cell">
         <span class="file-icon">${entry.isDirectory ? "📁" : entry.name.toLowerCase().endsWith(".pdf") ? "📄" : "🗎"}</span>
@@ -2141,24 +2280,94 @@ function renderDirectory(entries) {
       iconEl.classList.add(...icon.classNames);
     }
 
-    row.addEventListener("click", async (event) => {
+    row.addEventListener("click", (event) => {
+      event.preventDefault();
+      handleExplorerSelection(entry, event);
+      renderExplorerSelectionState();
+    });
+
+    row.addEventListener("dblclick", async (event) => {
+      event.preventDefault();
+      setExplorerSelection([entry.path], entry.path);
+      renderExplorerSelectionState();
       if (entry.isDirectory) {
         await loadDirectory(entry.path, { syncBrowserFromDirectory: true });
         return;
       }
-      event.preventDefault();
       openExplorerEntrySmart(entry);
     });
 
     row.addEventListener("contextmenu", (event) => {
       event.preventDefault();
+      if (!state.selectedExplorerPaths.has(entry.path)) {
+        setExplorerSelection([entry.path], entry.path);
+        renderExplorerSelectionState();
+      }
       openExplorerEntryMenu(entry, event.clientX, event.clientY);
     });
 
     row.addEventListener("dragstart", (event) => {
-      event.dataTransfer.effectAllowed = "copy";
-      event.dataTransfer.setData("text/plain", entry.path);
-      window.fuzzyApi.startExplorerDrag(entry.path);
+      if (!state.selectedExplorerPaths.has(entry.path)) {
+        setExplorerSelection([entry.path], entry.path);
+        renderExplorerSelectionState();
+      }
+      state.draggedExplorerPaths = state.selectedExplorerPaths.has(entry.path)
+        ? [...state.selectedExplorerPaths]
+        : [entry.path];
+      event.dataTransfer.effectAllowed = "move";
+      event.dataTransfer.setData("text/plain", state.draggedExplorerPaths.join("\n"));
+    });
+
+    row.addEventListener("dragend", () => {
+      state.draggedExplorerPaths = [];
+      state.explorerDropTargetPath = "";
+      renderDirectory(state.explorerEntries);
+    });
+
+    row.addEventListener("dragover", (event) => {
+      if (!entry.isDirectory || !state.draggedExplorerPaths.length) {
+        return;
+      }
+      event.preventDefault();
+      event.dataTransfer.dropEffect = "move";
+      if (state.explorerDropTargetPath !== entry.path) {
+        state.explorerDropTargetPath = entry.path;
+        renderExplorerDropTargetState();
+      }
+    });
+
+    row.addEventListener("dragleave", () => {
+      if (state.explorerDropTargetPath === entry.path) {
+        state.explorerDropTargetPath = "";
+        renderExplorerDropTargetState();
+      }
+    });
+
+    row.addEventListener("drop", async (event) => {
+      if (!entry.isDirectory || !state.draggedExplorerPaths.length) {
+        return;
+      }
+      event.preventDefault();
+      const draggedPaths = [...state.draggedExplorerPaths];
+      state.draggedExplorerPaths = [];
+      state.explorerDropTargetPath = "";
+      renderExplorerDropTargetState();
+      try {
+        const result = await window.fuzzyApi.moveExplorerEntries({
+          sourcePaths: draggedPaths,
+          destinationDirPath: entry.path,
+        });
+        if (Array.isArray(result?.mappings)) {
+          state.mappings = result.mappings;
+          renderMappings();
+          renderSubmissionFolderButton();
+        }
+        setExplorerSelection([], "");
+        await loadDirectory(state.currentDir || state.rootDir, { syncBrowserFromDirectory: false });
+        toast(`${result?.movedCount || draggedPaths.length} 件を移動しました`, "success");
+      } catch (error) {
+        toast(error.message, "error");
+      }
     });
 
     elements.fileList.appendChild(row);
@@ -2422,6 +2631,7 @@ async function showDownloadDialog(payload, tab, options = {}) {
   elements.downloadFolderLabel.textContent = state.downloadDraft.folderPath;
   elements.downloadFileNameInput.value = state.downloadDraft.fileName;
   elements.downloadFileNameHelp.textContent = state.downloadDraft.fileName;
+  setDialogFocusLock(true);
   elements.downloadDialog.showModal();
   focusDialogInput(elements.downloadFileNameInput, { select: true, selectFileStem: true });
 }
@@ -2479,7 +2689,26 @@ function wireEvents() {
     }
     event.preventDefault();
     event.stopPropagation();
+    if (state.selectedExplorerPaths.size > 0) {
+      showContextMenu([
+        {
+          label: "削除",
+          tone: "danger",
+          action: async () => deleteExplorerEntries(getSelectedExplorerEntries()),
+        },
+      ], event.clientX, event.clientY);
+      return;
+    }
     openExplorerBackgroundMenu(event.clientX, event.clientY);
+  });
+  elements.fileList.addEventListener("click", (event) => {
+    if (closestFromEventTarget(event.target, ".file-row")) {
+      return;
+    }
+    if (state.selectedExplorerPaths.size > 0) {
+      setExplorerSelection([], "");
+      renderExplorerSelectionState();
+    }
   });
   document.addEventListener("click", (event) => {
     if (!closestFromEventTarget(event.target, "#context-menu")) {
@@ -2644,6 +2873,13 @@ function wireEvents() {
 
   document.querySelector("#choose-root-button")?.addEventListener("click", chooseRootDirectory);
   document.querySelector("#dialog-choose-root-button").addEventListener("click", chooseRootDirectory);
+  elements.goRootFolderButton?.addEventListener("click", async () => {
+    if (!state.rootDir) {
+      toast("保存ルートがまだ設定されていません", "warn");
+      return;
+    }
+    await loadDirectory(state.rootDir, { syncBrowserFromDirectory: false });
+  });
 
   document.querySelector("#open-settings-button").addEventListener("click", () => {
     elements.settingsDialog.showModal();
@@ -2834,6 +3070,7 @@ function wireEvents() {
     elements.downloadFileNameHelp.textContent = nextValue.trim() || "ファイル名を入力してください";
   });
   elements.downloadDialog.addEventListener("close", () => {
+    setDialogFocusLock(false);
     state.downloadDraft = null;
     elements.downloadFileNameInput.value = "";
     elements.downloadFileNameHelp.textContent = "";
@@ -2855,10 +3092,15 @@ function wireEvents() {
     }
 
     const previousName = state.renameDraft.name;
-    await window.fuzzyApi.renameExplorerEntry({
+    const renameResult = await window.fuzzyApi.renameExplorerEntry({
       targetPath: state.renameDraft.path,
       nextName,
     });
+    if (Array.isArray(renameResult?.mappings)) {
+      state.mappings = renameResult.mappings;
+      renderMappings();
+      renderSubmissionFolderButton();
+    }
     elements.renameDialog.close();
     await loadDirectory(state.currentDir || state.rootDir, { syncBrowserFromDirectory: false });
     toast(`${previousName} の名前を変更しました`, "success");
@@ -2870,6 +3112,7 @@ function wireEvents() {
     elements.renameDialog.close();
   });
   elements.renameDialog.addEventListener("close", () => {
+    setDialogFocusLock(false);
     state.renameDraft = null;
     elements.renameCurrentName.textContent = "";
     elements.renameFileNameInput.value = "";

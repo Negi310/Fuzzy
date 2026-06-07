@@ -30,6 +30,8 @@ contextBridge.exposeInMainWorld("fuzzyApi", {
   openExplorerExecutable: (targetPath) => ipcRenderer.invoke("explorer:open-executable", targetPath),
   renameExplorerEntry: (payload) => ipcRenderer.invoke("explorer:rename", payload),
   deleteExplorerEntry: (targetPath) => ipcRenderer.invoke("explorer:delete", targetPath),
+  deleteExplorerEntries: (targetPaths) => ipcRenderer.invoke("explorer:delete-many", targetPaths),
+  moveExplorerEntries: (payload) => ipcRenderer.invoke("explorer:move", payload),
   onDownloadEvent: (handler) => ipcRenderer.on("download:event", (_event, payload) => handler(payload)),
   onDownloadPrompt: (handler) => ipcRenderer.on("download:prompt", (_event, payload) => handler(payload)),
   onLinkMenu: (handler) => ipcRenderer.on("link:menu", (_event, payload) => handler(payload)),

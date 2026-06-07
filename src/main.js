@@ -1874,6 +1874,8 @@ ipcMain.handle("explorer:rename", async (_event, payload) => {
     throw new Error("対象ファイルが見つかりません。");
   }
 
+  const targetStats = fs.statSync(payload.targetPath);
+
   const nextName = String(payload.nextName || "").trim();
   if (!nextName) {
     throw new Error("新しい名前を入力してください。");
@@ -1888,7 +1890,14 @@ ipcMain.handle("explorer:rename", async (_event, payload) => {
   }
 
   fs.renameSync(payload.targetPath, nextPath);
-  return { path: nextPath };
+  const renameResult = targetStats.isDirectory()
+    ? store.updateMappingPathsForRename(payload.targetPath, nextPath)
+    : { changed: false, mappings: null };
+
+  return {
+    path: nextPath,
+    mappings: renameResult.changed ? renameResult.mappings : null,
+  };
 });
 
 ipcMain.handle("explorer:delete", async (_event, targetPath) => {
@@ -1899,6 +1908,83 @@ ipcMain.handle("explorer:delete", async (_event, targetPath) => {
 
   await shell.trashItem(targetPath);
   return { ok: true };
+});
+
+ipcMain.handle("explorer:delete-many", async (_event, targetPaths) => {
+  const rootDir = getRootDir();
+  const paths = Array.isArray(targetPaths)
+    ? [...new Set(targetPaths.map((entry) => path.resolve(String(entry || ""))).filter(Boolean))]
+    : [];
+  if (!paths.length) {
+    throw new Error("削除対象が見つかりません。");
+  }
+
+  for (const targetPath of paths) {
+    if (!isSubPath(rootDir, targetPath) || !fs.existsSync(targetPath)) {
+      throw new Error("対象ファイルが見つかりません。");
+    }
+  }
+
+  for (const targetPath of paths) {
+    await shell.trashItem(targetPath);
+  }
+
+  return { ok: true };
+});
+
+ipcMain.handle("explorer:move", async (_event, payload) => {
+  const rootDir = getRootDir();
+  const destinationDirPath = path.resolve(String(payload?.destinationDirPath || ""));
+  const sourcePaths = Array.isArray(payload?.sourcePaths)
+    ? [...new Set(payload.sourcePaths.map((entry) => path.resolve(String(entry || ""))).filter(Boolean))]
+    : [];
+
+  if (!sourcePaths.length) {
+    throw new Error("移動対象が見つかりません。");
+  }
+  if (!destinationDirPath || !isSubPath(rootDir, destinationDirPath) || !fs.existsSync(destinationDirPath)) {
+    throw new Error("移動先フォルダが見つかりません。");
+  }
+  if (!fs.statSync(destinationDirPath).isDirectory()) {
+    throw new Error("移動先にはフォルダを指定してください。");
+  }
+
+  const plannedMoves = [];
+  for (const sourcePath of sourcePaths) {
+    if (!isSubPath(rootDir, sourcePath) || !fs.existsSync(sourcePath)) {
+      throw new Error("移動対象が見つかりません。");
+    }
+
+    const nextPath = path.join(destinationDirPath, path.basename(sourcePath));
+    if (path.resolve(nextPath) === sourcePath) {
+      continue;
+    }
+    if (isSubPath(sourcePath, destinationDirPath)) {
+      throw new Error("フォルダをその中へ移動することはできません。");
+    }
+    if (fs.existsSync(nextPath)) {
+      throw new Error(`${path.basename(nextPath)} は移動先にすでに存在します。`);
+    }
+
+    plannedMoves.push({
+      sourcePath,
+      nextPath,
+      isDirectory: fs.statSync(sourcePath).isDirectory(),
+    });
+  }
+
+  for (const move of plannedMoves) {
+    fs.renameSync(move.sourcePath, move.nextPath);
+    if (move.isDirectory) {
+      store.updateMappingPathsForRename(move.sourcePath, move.nextPath);
+    }
+  }
+
+  return {
+    ok: true,
+    movedCount: plannedMoves.length,
+    mappings: store.getState().mappings,
+  };
 });
 
 ipcMain.on("explorer:start-drag", async (event, targetPath) => {

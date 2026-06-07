@@ -21,6 +21,27 @@ function extractCourseIdFromUrl(targetUrl) {
   }
 }
 
+function normalizePathValue(targetPath) {
+  return String(targetPath || "").trim().toLowerCase();
+}
+
+function isSameOrChildPath(targetPath, basePath) {
+  const normalizedTarget = normalizePathValue(targetPath);
+  const normalizedBase = normalizePathValue(basePath);
+  return Boolean(
+    normalizedTarget &&
+    normalizedBase &&
+    (normalizedTarget === normalizedBase || normalizedTarget.startsWith(`${normalizedBase}\\`))
+  );
+}
+
+function replacePathPrefix(targetPath, fromPath, toPath) {
+  if (!isSameOrChildPath(targetPath, fromPath)) {
+    return targetPath || "";
+  }
+  return path.join(toPath, path.relative(fromPath, targetPath || ""));
+}
+
 class Store {
   constructor(filePath) {
     this.filePath = filePath;
@@ -166,6 +187,35 @@ class Store {
     };
     this.save();
     return this.state.mappings[index];
+  }
+
+  updateMappingPathsForRename(fromPath, toPath) {
+    let changed = false;
+
+    this.state.mappings = this.state.mappings.map((entry) => {
+      const nextFolderPath = replacePathPrefix(entry.folderPath, fromPath, toPath);
+      const nextSubmissionFolderPath = replacePathPrefix(entry.submissionFolderPath, fromPath, toPath);
+      if (nextFolderPath === entry.folderPath && nextSubmissionFolderPath === entry.submissionFolderPath) {
+        return entry;
+      }
+
+      changed = true;
+      return {
+        ...entry,
+        folderPath: nextFolderPath,
+        submissionFolderPath: nextSubmissionFolderPath,
+        updatedAt: new Date().toISOString(),
+      };
+    });
+
+    if (changed) {
+      this.save();
+    }
+
+    return {
+      changed,
+      mappings: structuredClone(this.state.mappings),
+    };
   }
 }
 
