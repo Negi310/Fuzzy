@@ -236,6 +236,9 @@ function setupAutoUpdater() {
 
   autoUpdater.autoDownload = true;
   autoUpdater.autoInstallOnAppQuit = true;
+  // Prefer Atom feed resolution over /releases/latest because the latter has
+  // been intermittently timing out for public GitHub releases in production.
+  autoUpdater.allowPrerelease = true;
 
   autoUpdater.on("checking-for-update", () => {
     writeUpdateLog("autoUpdater event", "checking-for-update");
