@@ -97,12 +97,18 @@ const elements = {
   openCoursePageButton: document.querySelector("#open-course-page-button"),
   openSubmissionFolderButton: document.querySelector("#open-submission-folder-button"),
   downloadDialog: document.querySelector("#download-dialog"),
+  downloadForm: document.querySelector("#download-form"),
   downloadFolderLabel: document.querySelector("#download-folder-label"),
   downloadFileNameInput: document.querySelector("#download-file-name"),
+  downloadFileNameHelp: document.querySelector("#download-file-name-help"),
   downloadChooseFolderButton: document.querySelector("#download-choose-folder-button"),
+  downloadCancelButton: document.querySelector("#download-cancel-button"),
   downloadSaveButton: document.querySelector("#download-save-button"),
   renameDialog: document.querySelector("#rename-dialog"),
+  renameForm: document.querySelector("#rename-form"),
+  renameCurrentName: document.querySelector("#rename-current-name"),
   renameFileNameInput: document.querySelector("#rename-file-name"),
+  renameCancelButton: document.querySelector("#rename-cancel-button"),
   renameSaveButton: document.querySelector("#rename-save-button"),
   contextMenuBackdrop: document.querySelector("#context-menu-backdrop"),
   contextMenu: document.querySelector("#context-menu"),
@@ -1774,6 +1780,58 @@ function isPlaceholderDownloadName(fileName) {
   return !normalized || ["download", "view.php", "view.htm", "view.html"].includes(normalized);
 }
 
+function getFileNameSelectionEnd(value) {
+  const normalized = String(value ?? "");
+  const lastDotIndex = normalized.lastIndexOf(".");
+  if (lastDotIndex <= 0) {
+    return normalized.length;
+  }
+  return lastDotIndex;
+}
+
+function focusDialogInput(input, { select = false, selectFileStem = false } = {}) {
+  if (!input) {
+    return;
+  }
+  const tryFocus = () => {
+    input.focus({ preventScroll: true });
+    if (select) {
+      if (selectFileStem) {
+        input.setSelectionRange(0, getFileNameSelectionEnd(input.value));
+      } else {
+        input.select();
+      }
+    }
+  };
+  requestAnimationFrame(tryFocus);
+  setTimeout(tryFocus, 60);
+  setTimeout(tryFocus, 180);
+}
+
+function isImeComposing(event) {
+  return Boolean(event?.isComposing || event?.keyCode === 229 || event?.currentTarget?.dataset?.imeComposing === "true");
+}
+
+function registerDialogTextInput(input, onSubmit) {
+  if (!input) {
+    return;
+  }
+  input.addEventListener("compositionstart", () => {
+    input.dataset.imeComposing = "true";
+  });
+  input.addEventListener("compositionend", () => {
+    input.dataset.imeComposing = "false";
+  });
+  input.addEventListener("keydown", (event) => {
+    event.stopPropagation();
+    if (event.key !== "Enter" || isImeComposing(event)) {
+      return;
+    }
+    event.preventDefault();
+    onSubmit();
+  });
+}
+
 async function duplicateExplorerEntry(entry) {
   await window.fuzzyApi.duplicateExplorerEntry(entry.path);
   await loadDirectory(state.currentDir || state.rootDir, { syncBrowserFromDirectory: false });
@@ -1783,11 +1841,9 @@ async function duplicateExplorerEntry(entry) {
 function showRenameDialog(entry) {
   state.renameDraft = entry;
   elements.renameFileNameInput.value = entry.name;
+  elements.renameCurrentName.textContent = `現在の名前: ${entry.name}`;
   elements.renameDialog.showModal();
-  requestAnimationFrame(() => {
-    elements.renameFileNameInput.focus();
-    elements.renameFileNameInput.select();
-  });
+  focusDialogInput(elements.renameFileNameInput, { select: true, selectFileStem: true });
 }
 
 async function deleteExplorerEntry(entry) {
@@ -2365,11 +2421,9 @@ async function showDownloadDialog(payload, tab, options = {}) {
 
   elements.downloadFolderLabel.textContent = state.downloadDraft.folderPath;
   elements.downloadFileNameInput.value = state.downloadDraft.fileName;
+  elements.downloadFileNameHelp.textContent = state.downloadDraft.fileName;
   elements.downloadDialog.showModal();
-  requestAnimationFrame(() => {
-    elements.downloadFileNameInput.focus();
-    elements.downloadFileNameInput.select();
-  });
+  focusDialogInput(elements.downloadFileNameInput, { select: true, selectFileStem: true });
 }
 
 function setupDashboardWebview() {
@@ -2751,17 +2805,38 @@ function wireEvents() {
     if (!state.downloadDraft) {
       return;
     }
+    const fileName = sanitizeFileName(elements.downloadFileNameInput.value);
+    if (!fileName) {
+      toast("保存するファイル名を入力してください", "warn");
+      focusDialogInput(elements.downloadFileNameInput, { select: true, selectFileStem: true });
+      return;
+    }
     await window.fuzzyApi.startCustomDownload({
       tabId: state.downloadDraft.tabId,
       url: state.downloadDraft.url,
       folderPath: state.downloadDraft.folderPath,
-      fileName: sanitizeFileName(elements.downloadFileNameInput.value),
+      fileName,
       lessonFolder: state.downloadDraft.lessonFolder || "",
     });
     elements.downloadDialog.close();
   });
+  elements.downloadForm.addEventListener("submit", (event) => {
+    event.preventDefault();
+  });
+  elements.downloadCancelButton.addEventListener("click", () => {
+    elements.downloadDialog.close();
+  });
+  elements.downloadFileNameInput.addEventListener("input", () => {
+    const nextValue = elements.downloadFileNameInput.value;
+    if (state.downloadDraft) {
+      state.downloadDraft.fileName = nextValue;
+    }
+    elements.downloadFileNameHelp.textContent = nextValue.trim() || "ファイル名を入力してください";
+  });
   elements.downloadDialog.addEventListener("close", () => {
     state.downloadDraft = null;
+    elements.downloadFileNameInput.value = "";
+    elements.downloadFileNameHelp.textContent = "";
   });
   elements.renameSaveButton.addEventListener("click", async () => {
     if (!state.renameDraft) {
@@ -2769,7 +2844,12 @@ function wireEvents() {
     }
 
     const nextName = elements.renameFileNameInput.value.trim();
-    if (!nextName || nextName === state.renameDraft.name) {
+    if (!nextName) {
+      toast("新しい名前を入力してください", "warn");
+      focusDialogInput(elements.renameFileNameInput, { select: true, selectFileStem: true });
+      return;
+    }
+    if (nextName === state.renameDraft.name) {
       elements.renameDialog.close();
       return;
     }
@@ -2783,20 +2863,24 @@ function wireEvents() {
     await loadDirectory(state.currentDir || state.rootDir, { syncBrowserFromDirectory: false });
     toast(`${previousName} の名前を変更しました`, "success");
   });
+  elements.renameForm.addEventListener("submit", (event) => {
+    event.preventDefault();
+  });
+  elements.renameCancelButton.addEventListener("click", () => {
+    elements.renameDialog.close();
+  });
   elements.renameDialog.addEventListener("close", () => {
     state.renameDraft = null;
+    elements.renameCurrentName.textContent = "";
+    elements.renameFileNameInput.value = "";
   });
   elements.renameDialog.addEventListener("click", (event) => {
     if (event.target === elements.renameDialog) {
       elements.renameDialog.close();
     }
   });
-  elements.renameFileNameInput.addEventListener("keydown", (event) => {
-    if (event.key === "Enter") {
-      event.preventDefault();
-      elements.renameSaveButton.click();
-    }
-  });
+  registerDialogTextInput(elements.downloadFileNameInput, () => elements.downloadSaveButton.click());
+  registerDialogTextInput(elements.renameFileNameInput, () => elements.renameSaveButton.click());
 
   window.addEventListener("resize", positionDockToggle);
   window.addEventListener("resize", hideContextMenu);

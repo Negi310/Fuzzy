@@ -1014,6 +1014,13 @@ button {
   color: #60718a;
 }
 
+.dialog-help {
+  margin: 8px 0 0;
+  font-size: 13px;
+  color: #60718a;
+  word-break: break-word;
+}
+
 .path-chip {
   padding: 11px 12px;
   border: 1px solid #dfe8f2;

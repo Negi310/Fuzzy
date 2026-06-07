@@ -135,7 +135,7 @@
       </dialog>
 
       <dialog id="download-dialog" class="download-dialog">
-        <form method="dialog" class="download-form">
+        <form id="download-form" method="dialog" class="download-form">
           <div class="dialog-header">
             <h2>ダウンロード</h2>
           </div>
@@ -151,27 +151,30 @@
           <section class="settings-section">
             <label class="setting-label" for="download-file-name">ファイル名</label>
             <input id="download-file-name" class="dialog-input" type="text" />
+            <p id="download-file-name-help" class="dialog-help"></p>
           </section>
 
           <menu class="dialog-actions">
+            <button id="download-cancel-button" type="button" class="ghost-button">閉じる</button>
             <button id="download-save-button" type="button" class="secondary-button">保存する</button>
           </menu>
         </form>
       </dialog>
 
       <dialog id="rename-dialog" class="download-dialog">
-        <form method="dialog" class="download-form">
+        <form id="rename-form" method="dialog" class="download-form">
           <div class="dialog-header">
             <h2>名前の変更</h2>
           </div>
 
           <section class="settings-section">
+            <p id="rename-current-name" class="dialog-help"></p>
             <label class="setting-label" for="rename-file-name">新しい名前</label>
             <input id="rename-file-name" class="dialog-input" type="text" />
           </section>
 
           <menu class="dialog-actions">
-            <button id="rename-cancel-button" value="cancel" class="ghost-button">閉じる</button>
+            <button id="rename-cancel-button" type="button" class="ghost-button">閉じる</button>
             <button id="rename-save-button" type="button" class="secondary-button">変更する</button>
           </menu>
         </form>
