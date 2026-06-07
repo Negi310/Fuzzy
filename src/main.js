@@ -1391,6 +1391,7 @@ function createWindow() {
     title: "Fuzitter",
     backgroundColor: "#0b1020",
     icon: path.join(__dirname, "..", "assets", "fuzitter.ico"),
+    autoHideMenuBar: true,
     webPreferences: {
       preload: path.join(__dirname, "preload.js"),
       contextIsolation: true,
@@ -1400,6 +1401,8 @@ function createWindow() {
     },
   });
 
+  mainWindow.setMenuBarVisibility(false);
+  mainWindow.removeMenu();
   mainWindow.loadFile(path.join(__dirname, "index.html"));
   mainWindow.webContents.once("did-finish-load", () => {
     emitAutoUpdateEvent({
