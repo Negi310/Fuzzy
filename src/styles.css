@@ -257,6 +257,12 @@ button {
   font-size: 0;
 }
 
+.is-hidden {
+  display: none !important;
+  opacity: 0;
+  pointer-events: none;
+}
+
 :root {
   --toolbar-icon-color: #5f7088;
   --toolbar-icon-size: 16px;
@@ -375,7 +381,8 @@ button {
   display: none;
 }
 
-.icon-button[data-icon="settings"]::before {
+.icon-button[data-icon="settings"]::before,
+.address-button[data-icon="settings"]::before {
   width: var(--toolbar-icon-size);
   height: var(--toolbar-icon-size);
   background: currentColor;
@@ -389,7 +396,8 @@ button {
   mask-size: contain;
 }
 
-.icon-button[data-icon="settings"]::after {
+.icon-button[data-icon="settings"]::after,
+.address-button[data-icon="settings"]::after {
   display: none;
 }
 
@@ -458,6 +466,10 @@ button {
   opacity: 0;
   transform: translateX(14px);
   pointer-events: none;
+}
+
+.side-panel.hidden .side-panel-inner {
+  visibility: hidden;
 }
 
 .side-panel-inner {
@@ -864,7 +876,7 @@ button {
   font-weight: 600;
 }
 
-.timeline-card-course,
+.timeline-card-detail,
 .timeline-card-meta {
   font-size: 13px;
   color: #5a6b84;

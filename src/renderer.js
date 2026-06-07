@@ -20,9 +20,9 @@ const UI_TEXT = {
 };
 
 const FAVORITE_LINKS = [
-  { label: "Moodle", url: () => state.moodleHome, title: UI_TEXT.defaultBrowserTitle },
-  { label: "Gemini", url: "https://gemini.google.com/app", title: "Gemini" },
-  { label: "NotebookLM", url: "https://notebooklm.google.com", title: "NotebookLM" },
+  { label: "Moodle", url: () => state.moodleHome, title: UI_TEXT.defaultBrowserTitle, explorerLinked: true },
+  { label: "Gemini", url: "https://gemini.google.com/app", title: "Gemini", explorerLinked: false },
+  { label: "NotebookLM", url: "https://notebooklm.google.com", title: "NotebookLM", explorerLinked: false },
 ];
 
 const state = {
@@ -76,6 +76,9 @@ const elements = {
   browserContent: document.querySelector("#browser-content"),
   browserSplitter: document.querySelector("#browser-splitter"),
   addressInput: document.querySelector("#address-input"),
+  openSettingsButton: document.querySelector("#open-settings-button"),
+  sidePanelTabActions: document.querySelector(".side-panel-tab-actions"),
+  hideSidePanelButton: document.querySelector("#hide-side-panel-button"),
   activeCourseLabel: document.querySelector("#active-course-label"),
   currentDirLabel: document.querySelector("#current-dir-label"),
   goRootFolderButton: document.querySelector("#go-root-folder-button"),
@@ -884,7 +887,9 @@ function renderCurrentPath(targetPath) {
 
 function parseTimelineDate(entry) {
   const haystack = `${entry.title || ""} ${entry.courseName || ""} ${entry.rawText || ""}`;
-  const match = haystack.match(/(?:(\d{4})[\/.-])?(\d{1,2})[\/.-](\d{1,2})(?:\s+|.*?)(\d{1,2}):(\d{2})/);
+  const match = haystack.match(
+    /(?:(\d{4})\s*[\/.\-年]\s*)?(\d{1,2})\s*[\/.\-月]\s*(\d{1,2})(?:\s*[日]?)?(?:\s+|.*?)(\d{1,2}):(\d{2})/
+  );
   if (!match) {
     return null;
   }
@@ -933,6 +938,23 @@ function classifyTimelineEntry(entry) {
   return { bucket: "later", label: "今後", dueDate, badge: "予定", badgeTone: "" };
 }
 
+function splitTimelineEntryText(text) {
+  const normalized = String(text || "").replace(/\s+/g, " ").trim();
+  if (!normalized) {
+    return { title: "", detail: "" };
+  }
+
+  const match = normalized.match(/^(.*?)(活動は.*)$/);
+  if (!match) {
+    return { title: normalized.replace(/\s*の\s*/g, "の"), detail: "" };
+  }
+
+  return {
+    title: match[1].replace(/\s*の\s*/g, "の").trim(),
+    detail: match[2].trim(),
+  };
+}
+
 function shouldHideTimelineEntry(entry) {
   const title = String(entry?.title || "").trim();
   return (
@@ -966,6 +988,7 @@ function renderSidePanelVisibility() {
   elements.workspaceMain.classList.toggle("panel-hidden", !state.panelVisible);
   elements.dockToggleButton.classList.toggle("panel-open", state.panelVisible);
   elements.dockToggleButton.textContent = state.panelVisible ? "＞" : "＜";
+  elements.sidePanelTabActions?.classList.toggle("is-hidden", !state.panelVisible);
   positionDockToggle();
 }
 
@@ -1018,12 +1041,43 @@ function focusBrowserSurface(tab) {
   }, 0);
 }
 
-function createBrowserTab(url, title = UI_TEXT.defaultBrowserTitle) {
+function isExplorerLinkedTab(tab) {
+  return tab?.explorerLinked !== false;
+}
+
+function activateExistingTab(tabId) {
+  if (!tabId) {
+    return false;
+  }
+  const preserveSplitRoles = attachNewTabToSplit(tabId);
+  activateTab(tabId, { preserveSplitRoles });
+  return true;
+}
+
+function findExistingDocumentTab({ path = "", url = "", kind = "" } = {}) {
+  const normalizedPath = String(path || "").toLowerCase();
+  const normalizedUrl = String(url || "").trim() ? normalizeUrl(url) : "";
+  return state.tabs.find((tab) => {
+    if (kind && tab.kind !== kind) {
+      return false;
+    }
+    if (normalizedPath && String(tab.path || "").toLowerCase() === normalizedPath) {
+      return true;
+    }
+    if (normalizedUrl && String(tab.url || "").trim() && normalizeUrl(tab.url) === normalizedUrl) {
+      return true;
+    }
+    return false;
+  }) || null;
+}
+
+function createBrowserTab(url, title = UI_TEXT.defaultBrowserTitle, options = {}) {
   const tab = {
     id: createId("browser"),
     kind: "browser",
     title,
     url: normalizeUrl(url),
+    explorerLinked: options.explorerLinked !== false,
     courseName: "",
     courseId: "",
     courseUrl: "",
@@ -1038,6 +1092,11 @@ function createBrowserTab(url, title = UI_TEXT.defaultBrowserTitle) {
 }
 
 function createLocalPdfTab(filePath, title, options = {}) {
+  const existingTab = findExistingDocumentTab({ path: filePath, kind: "local-pdf" });
+  if (existingTab) {
+    activateExistingTab(existingTab.id);
+    return existingTab;
+  }
   const tab = {
     id: createId("pdf-local"),
     kind: "local-pdf",
@@ -1052,9 +1111,15 @@ function createLocalPdfTab(filePath, title, options = {}) {
   mountTab(tab);
   const preserveSplitRoles = attachNewTabToSplit(tab.id);
   activateTab(tab.id, { preserveSplitRoles });
+  return tab;
 }
 
 function createRemotePdfTab(pdfUrl, title, sourceTab) {
+  const existingTab = findExistingDocumentTab({ url: pdfUrl, kind: "remote-pdf" });
+  if (existingTab) {
+    activateExistingTab(existingTab.id);
+    return existingTab;
+  }
   const tab = {
     id: createId("pdf-remote"),
     kind: "remote-pdf",
@@ -1071,9 +1136,15 @@ function createRemotePdfTab(pdfUrl, title, sourceTab) {
   mountTab(tab);
   const preserveSplitRoles = attachNewTabToSplit(tab.id);
   activateTab(tab.id, { preserveSplitRoles });
+  return tab;
 }
 
 function createRemoteFileTab(fileUrl, title, sourceTab) {
+  const existingTab = findExistingDocumentTab({ url: fileUrl, kind: "remote-file" });
+  if (existingTab) {
+    activateExistingTab(existingTab.id);
+    return existingTab;
+  }
   const tab = {
     id: createId("file-remote"),
     kind: "remote-file",
@@ -1247,22 +1318,26 @@ function scheduleDashboardTimelinePull() {
           ];
 
           const collect = () => {
-            const primaryAnchors = [
-              ...document.querySelectorAll("h6.event-name.mb-0.pb-1.text-truncate a[href]")
+            const eventNames = [
+              ...document.querySelectorAll("h6.event-name.mb-0.pb-1.text-truncate")
             ];
-            const fallbackAnchors = [
-              ...document.querySelectorAll(".event-name a[href]")
-            ];
-            const anchors = [...primaryAnchors, ...fallbackAnchors];
             const seen = new Set();
-            const items = anchors.flatMap((anchor) => {
-              const href = anchor.href;
-              const label = (anchor.textContent || "").trim().replace(/\\s+/g, " ");
+            const items = eventNames.flatMap((eventName) => {
+              const anchor = eventName.querySelector("a[href]");
+              const href = anchor?.href || "";
+              const ariaSource = eventName.matches("[aria-label]")
+                ? eventName
+                : eventName.querySelector("[aria-label]");
+              const label = (
+                ariaSource?.getAttribute("aria-label")
+                || eventName.textContent
+                || ""
+              ).trim().replace(/\\s+/g, " ");
               if (!href || !label || seen.has(href)) {
                 return [];
               }
               seen.add(href);
-              const container = anchor.closest("li, article, .event, .list-group-item, .activity-item, tr, .timeline-event");
+              const container = eventName.closest("li, article, .event, .list-group-item, .activity-item, tr, .timeline-event");
               const nearbyText = (container?.textContent || "").replace(/\\s+/g, " ").trim();
               const match = href.match(/[?&]id=(\\d+)/);
               return [{
@@ -1293,17 +1368,15 @@ function scheduleDashboardTimelinePull() {
               eventContainerCount: document.querySelectorAll(".event-name-container").length,
               eventNameCount: document.querySelectorAll(".event-name").length,
               timelineRegionCount: document.querySelectorAll("[data-region*='timeline'], .timeline, .block_timeline, [data-block='timeline']").length,
-              primaryAnchorCount: primaryAnchors.length,
-              fallbackAnchorCount: fallbackAnchors.length,
-              primaryAnchorPreview: primaryAnchors.slice(0, 3).map((anchor) => anchor.outerHTML.slice(0, 280)),
-              fallbackAnchorPreview: fallbackAnchors.slice(0, 3).map((anchor) => anchor.outerHTML.slice(0, 280)),
+              eventHeadingCount: eventNames.length,
+              eventHeadingPreview: eventNames.slice(0, 3).map((item) => item.outerHTML.slice(0, 280)),
               items
             };
           };
 
           let snapshot = collect();
           for (let attempt = 0; attempt < 12; attempt += 1) {
-            if (snapshot.primaryAnchorCount || snapshot.fallbackAnchorCount) {
+            if (snapshot.eventHeadingCount) {
               break;
             }
             const timelineRegion = timelineSelectors
@@ -1670,10 +1743,17 @@ function mountBrowserLikeTab(tab, usePreload = true) {
 
     const pageType = classifyMoodlePage(payload);
     tab.url = payload.url || tab.url;
-    tab.courseUrl = payload.url || tab.courseUrl || tab.url;
-    tab.courseId = payload.courseId || extractCourseIdFromUrl(tab.url);
-    tab.courseName = pageType === "course" ? normalizeCourseTitle(payload.courseName || "") : "";
-    tab.title = tab.courseName || payload.title || tab.title;
+    if (isExplorerLinkedTab(tab)) {
+      tab.courseUrl = payload.url || tab.courseUrl || tab.url;
+      tab.courseId = payload.courseId || extractCourseIdFromUrl(tab.url);
+      tab.courseName = pageType === "course" ? normalizeCourseTitle(payload.courseName || "") : "";
+      tab.title = tab.courseName || payload.title || tab.title;
+    } else {
+      tab.courseUrl = "";
+      tab.courseId = "";
+      tab.courseName = "";
+      tab.title = payload.title || tab.title;
+    }
 
     window.fuzzyApi.updateTabContext({
       tabId: tab.id,
@@ -1711,11 +1791,18 @@ function syncTabFromWebview(tab) {
   tab.url = tab.webviewEl.getURL();
   const htmlTitle = tab.webviewEl.getTitle() || tab.title;
   const pageType = classifyMoodlePage({ url: tab.url, title: htmlTitle });
-  const courseName = pageType === "course" ? normalizeCourseTitle(deriveCourseNameFromTitle(htmlTitle)) : "";
-  tab.courseName = courseName;
-  tab.courseId = extractCourseIdFromUrl(tab.url);
-  tab.courseUrl = tab.url;
-  tab.title = courseName || htmlTitle || tab.title;
+  if (isExplorerLinkedTab(tab)) {
+    const courseName = pageType === "course" ? normalizeCourseTitle(deriveCourseNameFromTitle(htmlTitle)) : "";
+    tab.courseName = courseName;
+    tab.courseId = extractCourseIdFromUrl(tab.url);
+    tab.courseUrl = tab.url;
+    tab.title = courseName || htmlTitle || tab.title;
+  } else {
+    tab.courseName = "";
+    tab.courseId = "";
+    tab.courseUrl = "";
+    tab.title = htmlTitle || tab.title;
+  }
 
   window.fuzzyApi.updateTabContext({
     tabId: tab.id,
@@ -1768,6 +1855,11 @@ function mountFileFrameTab(tab, src) {
 }
 
 function createLocalFileTab(filePath, title, options = {}) {
+  const existingTab = findExistingDocumentTab({ path: filePath, kind: "local-file" });
+  if (existingTab) {
+    activateExistingTab(existingTab.id);
+    return existingTab;
+  }
   const tab = {
     id: createId("file-local"),
     kind: "local-file",
@@ -1782,6 +1874,7 @@ function createLocalFileTab(filePath, title, options = {}) {
   mountTab(tab);
   const preserveSplitRoles = attachNewTabToSplit(tab.id);
   activateTab(tab.id, { preserveSplitRoles });
+  return tab;
 }
 
 function openLocalFileInTab(filePath, title, options = {}) {
@@ -2223,10 +2316,12 @@ function openWebLinkMenu(payload) {
 }
 
 async function updateCurrentCourse(tab) {
-  const courseName = shouldPromptForCourseMapping(tab) ? getDisplayCourseName(tab?.courseName) : UI_TEXT.noCourse;
+  const courseName = isExplorerLinkedTab(tab) && shouldPromptForCourseMapping(tab)
+    ? getDisplayCourseName(tab?.courseName)
+    : UI_TEXT.noCourse;
   elements.activeCourseLabel.textContent = courseName;
 
-  if (tab?.courseName && shouldPromptForCourseMapping(tab)) {
+  if (isExplorerLinkedTab(tab) && tab?.courseName && shouldPromptForCourseMapping(tab)) {
     const ensuredMapping = await ensureCourseMapping(tab);
     if (ensuredMapping?.needsPrompt) {
       renderSubmissionFolderButton();
@@ -2413,20 +2508,24 @@ function renderTimeline() {
 
   for (const entry of entries) {
     const meta = classifyTimelineEntry(entry);
+    const textParts = splitTimelineEntryText(entry.title);
     const card = document.createElement("button");
     card.type = "button";
     const isActive = Boolean(activeTab?.courseId && entry.courseId && activeTab.courseId === entry.courseId);
     card.className = `timeline-card ${isActive ? "active-course" : ""}`;
+    const detailHtml = textParts.detail
+      ? `<div class="timeline-card-detail">${escapeHtml(textParts.detail)}</div>`
+      : "";
     card.innerHTML = `
       <div class="timeline-card-top">
         <span class="timeline-badge ${meta.badgeTone}">${escapeHtml(meta.badge)}</span>
         <span class="timeline-card-meta">${meta.dueDate ? formatTimestamp(meta.dueDate.toISOString()) : ""}</span>
       </div>
-      <div class="timeline-card-title">${escapeHtml(entry.title)}</div>
-      <div class="timeline-card-course">${escapeHtml(entry.courseName || UI_TEXT.noCourse)}</div>
+      <div class="timeline-card-title">${escapeHtml(textParts.title || entry.title)}</div>
+      ${detailHtml}
     `;
     card.addEventListener("click", () => {
-      navigateCurrentBrowserTab(entry.href, entry.courseName || entry.title || UI_TEXT.defaultBrowserTitle);
+      navigateCurrentBrowserTab(entry.href, entry.title || UI_TEXT.defaultBrowserTitle);
       setPanelTab("timeline");
     });
     elements.timelineList.appendChild(card);
@@ -2446,10 +2545,12 @@ async function loadDirectory(targetPath, options = {}) {
     const mapping = findMappingForPath(result.currentDir);
     if (mapping) {
       const activeTab = getActiveTab();
-      if (mapping.courseUrl && activeTab?.courseUrl !== mapping.courseUrl) {
+      if (mapping.courseUrl && activeTab?.kind === "browser" && isExplorerLinkedTab(activeTab) && activeTab.courseUrl !== mapping.courseUrl) {
         navigateCurrentBrowserTab(mapping.courseUrl, mapping.courseName || UI_TEXT.defaultBrowserTitle);
       }
-      elements.activeCourseLabel.textContent = getDisplayCourseName(mapping.courseName);
+      if (isExplorerLinkedTab(activeTab)) {
+        elements.activeCourseLabel.textContent = getDisplayCourseName(mapping.courseName);
+      }
     }
   }
 
@@ -2779,7 +2880,7 @@ function wireEvents() {
         label: entry.label,
         action: async () => {
           const url = typeof entry.url === "function" ? entry.url() : entry.url;
-          createBrowserTab(url, entry.title);
+          createBrowserTab(url, entry.title, { explorerLinked: entry.explorerLinked });
         },
       })),
       rect.left,
@@ -2881,7 +2982,7 @@ function wireEvents() {
     await loadDirectory(state.rootDir, { syncBrowserFromDirectory: false });
   });
 
-  document.querySelector("#open-settings-button").addEventListener("click", () => {
+  elements.openSettingsButton?.addEventListener("click", () => {
     elements.settingsDialog.showModal();
   });
 
@@ -2975,7 +3076,7 @@ function wireEvents() {
     state.panelVisible = !state.panelVisible;
     renderSidePanelVisibility();
   });
-  document.querySelector("#hide-side-panel-button").addEventListener("click", () => {
+  elements.hideSidePanelButton?.addEventListener("click", () => {
     state.panelVisible = false;
     renderSidePanelVisibility();
   });
