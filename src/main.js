@@ -986,31 +986,105 @@ function fileExists(targetPath) {
   return Boolean(targetPath && fs.existsSync(targetPath));
 }
 
+function findCommandOnPath(commandName) {
+  if (!commandName) {
+    return "";
+  }
+
+  try {
+    const output = execFileSync("where.exe", [commandName], {
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"],
+      windowsHide: true,
+    });
+    return output
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .find(fileExists) || "";
+  } catch (_error) {
+    return "";
+  }
+}
+
+function readWindowsAppPath(executableName) {
+  if (!executableName) {
+    return "";
+  }
+
+  const registryKeys = [
+    "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\App Paths",
+    "HKLM\\Software\\Microsoft\\Windows\\CurrentVersion\\App Paths",
+  ];
+
+  for (const baseKey of registryKeys) {
+    try {
+      const output = execFileSync("reg.exe", ["query", `${baseKey}\\${executableName}`, "/ve"], {
+        encoding: "utf8",
+        stdio: ["ignore", "pipe", "ignore"],
+        windowsHide: true,
+      });
+      const match = output.match(/REG_\w+\s+(.+)$/m);
+      const resolvedPath = match?.[1]?.trim();
+      if (fileExists(resolvedPath)) {
+        return resolvedPath;
+      }
+    } catch (_error) {
+      // Ignore missing registry keys and continue with other lookup strategies.
+    }
+  }
+
+  return "";
+}
+
 function resolveProgramPath(programKey) {
   const localAppData = process.env.LOCALAPPDATA || "";
   const programFiles = process.env.ProgramFiles || "C:\\Program Files";
   const programFilesX86 = process.env["ProgramFiles(x86)"] || "C:\\Program Files (x86)";
   const commonCandidates = {
-    word: [
-      path.join(programFiles, "Microsoft Office", "Root", "Office16", "WINWORD.EXE"),
-      path.join(programFilesX86, "Microsoft Office", "Root", "Office16", "WINWORD.EXE"),
-    ],
-    excel: [
-      path.join(programFiles, "Microsoft Office", "Root", "Office16", "EXCEL.EXE"),
-      path.join(programFilesX86, "Microsoft Office", "Root", "Office16", "EXCEL.EXE"),
-    ],
-    powerpoint: [
-      path.join(programFiles, "Microsoft Office", "Root", "Office16", "POWERPNT.EXE"),
-      path.join(programFilesX86, "Microsoft Office", "Root", "Office16", "POWERPNT.EXE"),
-    ],
-    vscode: [
-      path.join(localAppData, "Programs", "Microsoft VS Code", "Code.exe"),
-      path.join(programFiles, "Microsoft VS Code", "Code.exe"),
-      path.join(programFilesX86, "Microsoft VS Code", "Code.exe"),
-    ],
+    word: {
+      executableName: "WINWORD.EXE",
+      candidates: [
+        path.join(programFiles, "Microsoft Office", "Root", "Office16", "WINWORD.EXE"),
+        path.join(programFilesX86, "Microsoft Office", "Root", "Office16", "WINWORD.EXE"),
+      ],
+    },
+    excel: {
+      executableName: "EXCEL.EXE",
+      candidates: [
+        path.join(programFiles, "Microsoft Office", "Root", "Office16", "EXCEL.EXE"),
+        path.join(programFilesX86, "Microsoft Office", "Root", "Office16", "EXCEL.EXE"),
+      ],
+    },
+    powerpoint: {
+      executableName: "POWERPNT.EXE",
+      candidates: [
+        path.join(programFiles, "Microsoft Office", "Root", "Office16", "POWERPNT.EXE"),
+        path.join(programFilesX86, "Microsoft Office", "Root", "Office16", "POWERPNT.EXE"),
+      ],
+    },
+    vscode: {
+      executableName: "Code.exe",
+      commandName: "code",
+      candidates: [
+        path.join(localAppData, "Programs", "Microsoft VS Code", "Code.exe"),
+        path.join(programFiles, "Microsoft VS Code", "Code.exe"),
+        path.join(programFilesX86, "Microsoft VS Code", "Code.exe"),
+        "D:\\VSCode\\Microsoft VS Code\\Code.exe",
+      ],
+    },
   };
 
-  return commonCandidates[programKey]?.find(fileExists) || "";
+  const programConfig = commonCandidates[programKey];
+  if (!programConfig) {
+    return "";
+  }
+
+  return (
+    programConfig.candidates.find(fileExists) ||
+    readWindowsAppPath(programConfig.executableName) ||
+    findCommandOnPath(programConfig.commandName || programConfig.executableName) ||
+    ""
+  );
 }
 
 function launchProgram(programPath, args) {
