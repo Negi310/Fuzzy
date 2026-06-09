@@ -1342,19 +1342,12 @@ function listDirectory(targetPath) {
   };
 }
 
-async function buildDragIcon(targetPath) {
-  try {
-    const icon = await app.getFileIcon(targetPath, { size: "normal" });
-    if (!icon.isEmpty()) {
-      return icon;
-    }
-  } catch (_error) {
-    // Fall back to a tiny generated icon when the shell icon is unavailable.
-  }
+const FALLBACK_DRAG_ICON = nativeImage.createFromDataURL(
+  "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAQAAAAAYLlVAAAA8ElEQVR4Ae3XsQ2DQBBF0Q+NQY4M4QLM4Bys4AnM4AjOwN1QHyvDOMkMt2rt7Nmzu13R5pTKty+O+kO5RAAAAAAAAAAAAICR9wMyoVo9hw3rroWAt4EvsC0BpvyEukgqS0bkkCm1cW0BpGbkADVYAKjwxKF1uHmIiiaTZGi4ZTSdKCbFf8gDuwZQhQAEjrISFRCGDpa2BkLomqKgJo0aoArkC5AOIDMDEwZ0AqSdzdrIW6DCQE4kYvNysGEKMluSleqrs9jwELyhlHLLJoPLD114F8nGMD4HzyBbs6k8ZZrguSu2Ce279b9Ec/WWavOXJeAAAAAAAAAAAAAACA74B/A9vywgq6Z9YAAAAASUVORK5CYII="
+);
 
-  return nativeImage.createFromDataURL(
-    "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAQAAAAAYLlVAAAA8ElEQVR4Ae3XsQ2DQBBF0Q+NQY4M4QLM4Bys4AnM4AjOwN1QHyvDOMkMt2rt7Nmzu13R5pTKty+O+kO5RAAAAAAAAAAAAICR9wMyoVo9hw3rroWAt4EvsC0BpvyEukgqS0bkkCm1cW0BpGbkADVYAKjwxKF1uHmIiiaTZGi4ZTSdKCbFf8gDuwZQhQAEjrISFRCGDpa2BkLomqKgJo0aoArkC5AOIDMDEwZ0AqSdzdrIW6DCQE4kYvNysGEKMluSleqrs9jwELyhlHLLJoPLD114F8nGMD4HzyBbs6k8ZZrguSu2Ce279b9Ec/WWavOXJeAAAAAAAAAAAAAACA74B/A9vywgq6Z9YAAAAASUVORK5CYII="
-  );
+function buildDragIcon() {
+  return FALLBACK_DRAG_ICON;
 }
 
 function sendToRenderer(channel, payload) {
@@ -1492,6 +1485,411 @@ function findWebContentsForTab(tabId) {
     return null;
   }
   return webContents.fromId(targetEntry[0]) || null;
+}
+
+function getUploadKindForUrl(targetUrl = "") {
+  try {
+    const parsed = new URL(targetUrl);
+    const hostname = parsed.hostname.toLowerCase();
+    if (/moodle(?:\d{4})?\.wakayama-u\.ac\.jp$/i.test(hostname)) {
+      return "moodle";
+    }
+    if (hostname === "gemini.google.com") {
+      return "gemini";
+    }
+    if (hostname === "notebooklm.google.com") {
+      return "notebooklm";
+    }
+  } catch (_error) {
+    // Ignore invalid URLs.
+  }
+  return "generic";
+}
+
+async function findUploadInputNodeId(targetContents, uploadKind) {
+  const preparation = await targetContents.executeJavaScript(`
+    (async () => {
+      const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+      const frameDocs = (rootDocument = document, seen = new Set()) => {
+        const docs = [];
+        const visit = (doc) => {
+          if (!doc || seen.has(doc)) {
+            return;
+          }
+          seen.add(doc);
+          docs.push(doc);
+          const frames = doc.querySelectorAll ? doc.querySelectorAll("iframe") : [];
+          for (const frame of frames) {
+            try {
+              const childDoc = frame.contentDocument || frame.contentWindow?.document || null;
+              if (childDoc) {
+                visit(childDoc);
+              }
+            } catch (_error) {
+              // Ignore cross-origin frames.
+            }
+          }
+        };
+        visit(rootDocument);
+        return docs;
+      };
+      const isVisible = (element) => {
+        if (!element) {
+          return false;
+        }
+        const style = window.getComputedStyle(element);
+        if (style.display === "none" || style.visibility === "hidden" || style.opacity === "0") {
+          return false;
+        }
+        const rect = element.getBoundingClientRect();
+        return rect.width > 0 && rect.height > 0;
+      };
+
+      const walk = (root, includeHidden = false, bucket = []) => {
+        if (!root) {
+          return bucket;
+        }
+        const nodes = root.querySelectorAll ? root.querySelectorAll("*") : [];
+        for (const node of nodes) {
+          if (node instanceof HTMLInputElement && node.type === "file" && !node.disabled) {
+            if (includeHidden || isVisible(node)) {
+              bucket.push(node);
+            }
+          }
+          if (node.shadowRoot) {
+            walk(node.shadowRoot, includeHidden, bucket);
+          }
+        }
+        return bucket;
+      };
+
+      const clickSelectors = async (selectors) => {
+        for (const doc of frameDocs()) {
+          for (const selector of selectors) {
+            const candidate = doc.querySelector(selector);
+            if (candidate instanceof HTMLElement) {
+              candidate.click();
+              await delay(250);
+            }
+          }
+        }
+      };
+
+      const clickByLabel = async (labels = []) => {
+        const selectors = [
+          "button",
+          "[role='button']",
+          "[role='menuitem']",
+          "[role='option']",
+          "[role='listitem']",
+          "li",
+          "label",
+          ".fp-btn-add",
+          ".dndupload-message",
+          ".filepicker .btn",
+        ];
+        for (let attempt = 0; attempt < 3; attempt += 1) {
+          for (const doc of frameDocs()) {
+            const candidates = [...doc.querySelectorAll(selectors.join(", "))];
+            for (const candidate of candidates) {
+              const label = (
+                candidate.getAttribute("aria-label") ||
+                candidate.getAttribute("title") ||
+                candidate.textContent ||
+                ""
+              ).trim().toLowerCase();
+              if (!label) {
+                continue;
+              }
+              if (labels.some((entry) => label.includes(entry))) {
+                candidate.click();
+                await delay(450);
+                return;
+              }
+            }
+          }
+          await delay(250);
+        }
+      };
+
+      const clickMoodleFallback = async () => {
+        await clickByLabel([
+          "追加",
+          "ファイルを追加",
+          "提出を追加",
+          "upload",
+          "add",
+          "submission",
+          "ドラッグ",
+        ]);
+      };
+
+      const clickGeminiFallback = async () => {
+        await clickByLabel(["upload", "attach", "plus", "アップロード", "添付", "ツール"]);
+        await clickByLabel(["upload files", "upload from computer", "ファイルをアップロード", "ファイルを追加", "パソコンからアップロード", "写真を追加"]);
+      };
+
+      const collectInputs = (includeHidden = false) => frameDocs()
+        .flatMap((doc) => walk(doc, includeHidden, []));
+      const diagnostics = () => {
+        const docs = frameDocs();
+        const buttons = docs.flatMap((doc) => [...doc.querySelectorAll("button, [role='button'], .fp-btn-add")]);
+        const buttonLabels = buttons
+          .map((button) => (
+            button.getAttribute?.("aria-label") ||
+            button.getAttribute?.("title") ||
+            button.textContent ||
+            ""
+          ).trim().replace(/\\s+/g, " "))
+          .filter(Boolean)
+          .slice(0, 8);
+        return {
+          url: location.href,
+          title: document.title,
+          frameCount: Math.max(docs.length - 1, 0),
+          visibleInputCount: collectInputs(false).length,
+          hiddenInputCount: collectInputs(true).length,
+          buttonCount: buttons.length,
+          buttonLabels,
+        };
+      };
+
+      const inputKinds = [
+        ...collectInputs(false),
+        ...collectInputs(true),
+      ];
+
+      let input = inputKinds.find((candidate) => isVisible(candidate)) || inputKinds[0] || null;
+      if (!input) {
+        if (${JSON.stringify(uploadKind)} === "moodle") {
+          await clickSelectors([
+            "button.fp-btn-add",
+            ".filemanager .fp-btn-add",
+            ".filepicker .fp-btn-add",
+            ".filemanager .dndupload-message",
+            ".filemanager-container .dndupload-message",
+            "[data-action='upload']",
+          ]);
+          await clickMoodleFallback();
+        } else if (${JSON.stringify(uploadKind)} === "gemini") {
+          await clickSelectors([
+            "button[aria-label*='Upload']",
+            "button[aria-label*='upload']",
+            "button[aria-label*='Attach']",
+            "button[aria-label*='attach']",
+            "button[aria-label*='Tool']",
+            "button[aria-label*='tool']",
+            "button[title*='Upload']",
+            "button[title*='Attach']",
+            "button[title*='Tool']",
+          ]);
+          await clickGeminiFallback();
+        } else if (${JSON.stringify(uploadKind)} === "notebooklm") {
+          await clickSelectors([
+            "button[aria-label*='Upload']",
+            "button[aria-label*='upload']",
+            "button[title*='Upload']",
+          ]);
+        }
+
+        const refreshedInputs = [
+          ...collectInputs(false),
+          ...collectInputs(true),
+        ];
+        input = refreshedInputs.find((candidate) => isVisible(candidate)) || refreshedInputs[0] || null;
+      }
+
+      if (!input) {
+        return { ok: false, reason: "no-input", diagnostics: diagnostics() };
+      }
+
+      input.setAttribute("data-fuzitter-upload-target", "1");
+      input.scrollIntoView?.({ block: "center", inline: "center" });
+      return { ok: true, diagnostics: diagnostics() };
+    })();
+  `, true);
+
+  if (!preparation?.ok) {
+    return {
+      nodeId: 0,
+      diagnostics: preparation?.diagnostics || null,
+    };
+  }
+
+  let nodeId = 0;
+
+  try {
+    const domRoot = await targetContents.debugger.sendCommand("DOM.getDocument", {
+      depth: -1,
+      pierce: true,
+    });
+    const query = await targetContents.debugger.sendCommand("DOM.querySelector", {
+      nodeId: domRoot?.root?.nodeId,
+      selector: 'input[type="file"][data-fuzitter-upload-target="1"]',
+    });
+    nodeId = Number(query?.nodeId || 0);
+  } catch (_error) {
+    nodeId = 0;
+  }
+
+  if (!nodeId) {
+    const evalResult = await targetContents.debugger.sendCommand("Runtime.evaluate", {
+      expression: `(() => {
+        const walk = (root) => {
+          if (!root) {
+            return null;
+          }
+          const nodes = root.querySelectorAll ? root.querySelectorAll("*") : [];
+          for (const node of nodes) {
+            if (
+              node instanceof HTMLInputElement &&
+              node.type === "file" &&
+              node.getAttribute("data-fuzitter-upload-target") === "1"
+            ) {
+              return node;
+            }
+            if (node.shadowRoot) {
+              const shadowMatch = walk(node.shadowRoot);
+              if (shadowMatch) {
+                return shadowMatch;
+              }
+            }
+          }
+          return null;
+        };
+        return walk(document);
+      })()`,
+      objectGroup: "fuzitter-upload",
+    });
+
+    const objectId = evalResult?.result?.objectId;
+    if (objectId) {
+      const requestedNode = await targetContents.debugger.sendCommand("DOM.requestNode", { objectId });
+      nodeId = Number(requestedNode?.nodeId || 0);
+    }
+  }
+
+  return {
+    nodeId,
+    diagnostics: preparation?.diagnostics || null,
+  };
+}
+
+async function uploadFilesToTab(tabId, filePaths = [], tabUrl = "") {
+  const targetContents = findWebContentsForTab(tabId);
+  if (!targetContents) {
+    throw new Error("対象のタブが見つかりません。");
+  }
+
+  const resolvedPaths = filePaths
+    .map((filePath) => path.resolve(filePath || ""))
+    .filter((filePath) => {
+      try {
+        return fs.existsSync(filePath) && fs.statSync(filePath).isFile();
+      } catch (_error) {
+        return false;
+      }
+    });
+
+  if (!resolvedPaths.length) {
+    throw new Error("アップロードできるファイルがありません。");
+  }
+
+  const uploadKind = getUploadKindForUrl(tabUrl || targetContents.getURL?.() || "");
+  const debuggerWasAttached = targetContents.debugger.isAttached();
+  if (!debuggerWasAttached) {
+    targetContents.debugger.attach("1.3");
+  }
+
+  try {
+    await targetContents.debugger.sendCommand("DOM.enable");
+    await targetContents.debugger.sendCommand("Runtime.enable");
+
+    const uploadTarget = await findUploadInputNodeId(targetContents, uploadKind);
+    if (!uploadTarget.nodeId) {
+      const diagnostics = uploadTarget.diagnostics
+        ? ` kind=${uploadKind} url=${uploadTarget.diagnostics.url || "-"} visibleInputs=${uploadTarget.diagnostics.visibleInputCount ?? 0} hiddenInputs=${uploadTarget.diagnostics.hiddenInputCount ?? 0} frames=${uploadTarget.diagnostics.frameCount ?? 0} buttons=${uploadTarget.diagnostics.buttonCount ?? 0} labels=${(uploadTarget.diagnostics.buttonLabels || []).join(" / ")}`
+        : ` kind=${uploadKind}`;
+      throw new Error(`このページでアップロード欄が見つかりません。${diagnostics}`);
+    }
+
+    await targetContents.debugger.sendCommand("DOM.setFileInputFiles", {
+      nodeId: uploadTarget.nodeId,
+      files: resolvedPaths,
+    });
+
+    await targetContents.executeJavaScript(`
+      (() => {
+        const walk = (root) => {
+          if (!root) {
+            return null;
+          }
+          const nodes = root.querySelectorAll ? root.querySelectorAll("*") : [];
+          for (const node of nodes) {
+            if (
+              node instanceof HTMLInputElement &&
+              node.type === "file" &&
+              node.getAttribute("data-fuzitter-upload-target") === "1"
+            ) {
+              return node;
+            }
+            if (node.shadowRoot) {
+              const shadowMatch = walk(node.shadowRoot);
+              if (shadowMatch) {
+                return shadowMatch;
+              }
+            }
+          }
+          return null;
+        };
+        const input = walk(document);
+        if (!input) {
+          return false;
+        }
+        input.dispatchEvent(new Event("input", { bubbles: true }));
+        input.dispatchEvent(new Event("change", { bubbles: true }));
+        input.removeAttribute("data-fuzitter-upload-target");
+        return true;
+      })();
+    `, true);
+
+    return {
+      ok: true,
+      count: resolvedPaths.length,
+      uploadKind,
+    };
+  } finally {
+    try {
+      await targetContents.executeJavaScript(`
+        (() => {
+          const clear = (root) => {
+            if (!root) {
+              return;
+            }
+            const nodes = root.querySelectorAll ? root.querySelectorAll("*") : [];
+            for (const node of nodes) {
+              if (
+                node instanceof HTMLInputElement &&
+                node.type === "file" &&
+                node.getAttribute("data-fuzitter-upload-target") === "1"
+              ) {
+                node.removeAttribute("data-fuzitter-upload-target");
+              }
+              if (node.shadowRoot) {
+                clear(node.shadowRoot);
+              }
+            }
+          };
+          clear(document);
+        })();
+      `, true);
+    } catch (_error) {
+      // Ignore cleanup failures.
+    }
+    if (!debuggerWasAttached && targetContents.debugger.isAttached()) {
+      targetContents.debugger.detach();
+    }
+  }
 }
 
 function queueCustomDownload(tabId, config) {
@@ -1884,14 +2282,19 @@ ipcMain.handle("mapping:save", (_event, payload) => {
 ipcMain.handle("mapping:create-default-folder", (_event, payload) => {
   const rootDir = getRootDir();
   const folderPath = path.join(rootDir, sanitizeFolderName(normalizeCourseFolderName(payload.courseName || "")));
+  const createdNewFolder = !fs.existsSync(folderPath);
   ensureDirectory(folderPath);
-  return store.upsertMapping({
+  const mapping = store.upsertMapping({
     courseName: payload.courseName,
     courseId: payload.courseId || extractCourseIdFromUrl(payload.courseUrl),
     courseUrl: payload.courseUrl || "",
     folderPath,
     matchType: "new-folder",
   });
+  return {
+    ...mapping,
+    createdNewFolder,
+  };
 });
 
 ipcMain.handle("mapping:set-submission-folder", (_event, payload) => {
@@ -2154,16 +2557,15 @@ ipcMain.handle("explorer:move", async (_event, payload) => {
   };
 });
 
-ipcMain.on("explorer:start-drag", async (event, targetPath) => {
+ipcMain.on("explorer:start-drag", (event, targetPath) => {
   const resolvedPath = path.resolve(targetPath || "");
   if (!fs.existsSync(resolvedPath)) {
     return;
   }
 
-  const icon = await buildDragIcon(resolvedPath);
   event.sender.startDrag({
     file: resolvedPath,
-    icon,
+    icon: buildDragIcon(),
   });
 });
 
@@ -2228,6 +2630,10 @@ ipcMain.on("webview:unregister", (_event, payload) => {
 
 ipcMain.on("tab-context:update", (_event, payload) => {
   tabRegistry.set(payload.tabId, payload.context);
+});
+
+ipcMain.handle("webview:upload-files", async (_event, payload) => {
+  return uploadFilesToTab(payload?.tabId, payload?.filePaths || [], payload?.tabUrl || "");
 });
 
 ipcMain.handle("download:batch", async (_event, tabId) => {
