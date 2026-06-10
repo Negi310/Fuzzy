@@ -54,11 +54,7 @@ const state = {
   selectedExplorerPaths: new Set(),
   explorerSelectionAnchorPath: "",
   draggedExplorerPaths: [],
-  pendingBrowserUploadPaths: [],
-  explorerDropTargetPath: "",
-  browserUploadDropTabId: "",
-  browserUploadArmed: false,
-  browserUploadResetTimer: 0,
+  cutExplorerPaths: [],
   downloadDraft: null,
   renameDraft: null,
   contextMenu: null,
@@ -511,6 +507,14 @@ function clearBrowserUploadDropState() {
   elements.browserContent.querySelectorAll(".browser-upload-dropzone").forEach((overlay) => {
     overlay.classList.remove("active");
   });
+}
+
+function finishBrowserUploadDrag() {
+  window.setTimeout(() => {
+    if (!state.draggedExplorerPaths.length) {
+      clearBrowserUploadDropState();
+    }
+  }, 120);
 }
 
 function syncBrowserUploadDropState(preferredTabId = "") {
@@ -2020,9 +2024,6 @@ function syncExplorerSelection() {
   if (state.explorerSelectionAnchorPath && !validPaths.has(state.explorerSelectionAnchorPath)) {
     state.explorerSelectionAnchorPath = "";
   }
-  if (state.explorerDropTargetPath && !validPaths.has(state.explorerDropTargetPath)) {
-    state.explorerDropTargetPath = "";
-  }
 }
 
 function setExplorerSelection(paths, anchorPath = "") {
@@ -2034,13 +2035,6 @@ function renderExplorerSelectionState() {
   elements.fileList.querySelectorAll(".file-row").forEach((row) => {
     const entryPath = row.dataset.entryPath || "";
     row.classList.toggle("selected", state.selectedExplorerPaths.has(entryPath));
-  });
-}
-
-function renderExplorerDropTargetState() {
-  elements.fileList.querySelectorAll(".file-row").forEach((row) => {
-    const entryPath = row.dataset.entryPath || "";
-    row.classList.toggle("drop-target", state.explorerDropTargetPath === entryPath);
   });
 }
 
@@ -2116,6 +2110,57 @@ async function deleteExplorerEntries(entries) {
       : `${uniqueEntries.length} 件を削除しました`,
     "success"
   );
+}
+
+function cutSelectedExplorerEntries() {
+  const entries = getSelectedExplorerEntries().filter((entry) => entry && entry.path);
+  if (!entries.length) {
+    return false;
+  }
+  state.cutExplorerPaths = entries.map((entry) => entry.path);
+  toast(`${entries.length} 件を切り取りました`, "info");
+  return true;
+}
+
+async function pasteCutExplorerEntries() {
+  if (!state.cutExplorerPaths.length) {
+    return false;
+  }
+
+  const selectedEntries = getSelectedExplorerEntries();
+  const destinationDirPath = selectedEntries.length === 1 && selectedEntries[0].isDirectory
+    ? selectedEntries[0].path
+    : (state.currentDir || state.rootDir);
+  if (!destinationDirPath) {
+    return false;
+  }
+
+  const sourcePaths = [...state.cutExplorerPaths];
+  const filteredSourcePaths = sourcePaths.filter((entryPath) => entryPath !== destinationDirPath);
+  if (!filteredSourcePaths.length) {
+    state.cutExplorerPaths = [];
+    return false;
+  }
+
+  try {
+    const result = await window.fuzzyApi.moveExplorerEntries({
+      sourcePaths: filteredSourcePaths,
+      destinationDirPath,
+    });
+    if (Array.isArray(result?.mappings)) {
+      state.mappings = result.mappings;
+      renderMappings();
+      renderSubmissionFolderButton();
+    }
+    state.cutExplorerPaths = [];
+    setExplorerSelection([], "");
+    await loadDirectory(state.currentDir || state.rootDir, { syncBrowserFromDirectory: false });
+    toast(`${result?.movedCount || filteredSourcePaths.length} 件を移動しました`, "success");
+    return true;
+  } catch (error) {
+    toast(error.message, "error");
+    return false;
+  }
 }
 
 async function ensureCourseMapping(tab) {
@@ -2198,7 +2243,6 @@ function mountBrowserLikeTab(tab, usePreload = true) {
 
   webview.addEventListener("did-finish-load", () => {
     syncTabFromWebview(tab);
-    void refreshBrowserUploadDropzone(tab);
     if (tab.id === state.activeTabId) {
       focusBrowserSurface(tab);
     }
@@ -2206,12 +2250,10 @@ function mountBrowserLikeTab(tab, usePreload = true) {
 
   webview.addEventListener("did-navigate", () => {
     syncTabFromWebview(tab);
-    void refreshBrowserUploadDropzone(tab);
   });
 
   webview.addEventListener("did-navigate-in-page", () => {
     syncTabFromWebview(tab);
-    void refreshBrowserUploadDropzone(tab);
   });
 
   webview.addEventListener("dom-ready", () => {
@@ -2267,15 +2309,6 @@ function mountBrowserLikeTab(tab, usePreload = true) {
       return;
     }
 
-    if (event.channel === "dnd-debug") {
-      const phase = payload.phase || "drag";
-      const count = Number(payload.fileCount || 0);
-      const types = Array.isArray(payload.types) ? payload.types.join(", ") : "";
-      const targetText = payload.target?.text ? ` / ${payload.target.text}` : "";
-      toast(`[DND:${phase}] files=${count} types=${types}${targetText}`.slice(0, 180), count > 0 ? "success" : "warn");
-      return;
-    }
-
     if (event.channel !== "page-context") {
       return;
     }
@@ -2314,14 +2347,8 @@ function mountBrowserLikeTab(tab, usePreload = true) {
 
   tab.webviewEl = webview;
   tab.contentEl = contentEl;
-  tab.uploadOverlayEl = uploadOverlay;
-  contentEl.appendChild(uploadOverlay);
   contentEl.appendChild(webview);
   elements.browserContent.appendChild(contentEl);
-  bindBrowserUploadDropTarget(contentEl, tab);
-  bindBrowserUploadDropTarget(uploadOverlay, tab);
-  bindBrowserUploadDropTarget(webview, tab);
-  void refreshBrowserUploadDropzone(tab);
 
   renderBrowserLayout();
 }
@@ -2918,8 +2945,7 @@ function renderDirectory(entries) {
     const row = document.createElement("button");
     row.type = "button";
     const isSelected = state.selectedExplorerPaths.has(entry.path);
-    const isDropTarget = state.explorerDropTargetPath === entry.path;
-    row.className = `file-row ${isSelected ? "selected" : ""} ${isDropTarget ? "drop-target" : ""}`.trim();
+    row.className = `file-row ${isSelected ? "selected" : ""}`.trim();
     row.draggable = true;
     row.title = entry.name;
     row.dataset.entryPath = entry.path;
@@ -2972,76 +2998,16 @@ function renderDirectory(entries) {
       state.draggedExplorerPaths = state.selectedExplorerPaths.has(entry.path)
         ? [...state.selectedExplorerPaths]
         : [entry.path];
-      event.dataTransfer.effectAllowed = getDraggedUploadEntries().length ? "copyMove" : "move";
-      event.dataTransfer.setData("text/plain", state.draggedExplorerPaths.join("\n"));
-      state.pendingBrowserUploadPaths = [...state.draggedExplorerPaths];
+      event.dataTransfer.effectAllowed = "copy";
+      event.dataTransfer.setData("text/plain", entry.path);
       if (!entry.isDirectory) {
         window.fuzzyApi.startExplorerDrag(entry.path);
       }
-      state.browserUploadArmed = getDraggedUploadEntries().length > 0;
-      if (state.browserUploadArmed) {
-        primeBrowserUploadDropzones();
-        scheduleBrowserUploadReset();
-      }
-      syncBrowserUploadDropState("");
     });
 
     row.addEventListener("dragend", () => {
       state.draggedExplorerPaths = [];
-      state.explorerDropTargetPath = "";
-      if (state.browserUploadArmed) {
-        scheduleBrowserUploadReset(4000);
-      } else {
-        clearBrowserUploadDropState();
-      }
       renderDirectory(state.explorerEntries);
-    });
-
-    row.addEventListener("dragover", (event) => {
-      if (!entry.isDirectory || !state.draggedExplorerPaths.length) {
-        return;
-      }
-      event.preventDefault();
-      event.dataTransfer.dropEffect = "move";
-      if (state.explorerDropTargetPath !== entry.path) {
-        state.explorerDropTargetPath = entry.path;
-        renderExplorerDropTargetState();
-      }
-    });
-
-    row.addEventListener("dragleave", () => {
-      if (state.explorerDropTargetPath === entry.path) {
-        state.explorerDropTargetPath = "";
-        renderExplorerDropTargetState();
-      }
-    });
-
-    row.addEventListener("drop", async (event) => {
-      if (!entry.isDirectory || !state.draggedExplorerPaths.length) {
-        return;
-      }
-      event.preventDefault();
-      const draggedPaths = [...state.draggedExplorerPaths];
-      state.draggedExplorerPaths = [];
-      clearPendingBrowserUploadPaths();
-      state.explorerDropTargetPath = "";
-      renderExplorerDropTargetState();
-      try {
-        const result = await window.fuzzyApi.moveExplorerEntries({
-          sourcePaths: draggedPaths,
-          destinationDirPath: entry.path,
-        });
-        if (Array.isArray(result?.mappings)) {
-          state.mappings = result.mappings;
-          renderMappings();
-          renderSubmissionFolderButton();
-        }
-        setExplorerSelection([], "");
-        await loadDirectory(state.currentDir || state.rootDir, { syncBrowserFromDirectory: false });
-        toast(`${result?.movedCount || draggedPaths.length} 件を移動しました`, "success");
-      } catch (error) {
-        toast(error.message, "error");
-      }
     });
 
     elements.fileList.appendChild(row);
@@ -3412,6 +3378,23 @@ function wireEvents() {
   });
   window.addEventListener("blur", hideContextMenu);
   window.addEventListener("keydown", (event) => {
+    if ((event.ctrlKey || event.metaKey) && !event.shiftKey && event.key.toLowerCase() === "x") {
+      const active = document.activeElement;
+      const typing = active instanceof HTMLInputElement || active instanceof HTMLTextAreaElement || active?.isContentEditable;
+      if (!typing && cutSelectedExplorerEntries()) {
+        event.preventDefault();
+        return;
+      }
+    }
+    if ((event.ctrlKey || event.metaKey) && !event.shiftKey && event.key.toLowerCase() === "v") {
+      const active = document.activeElement;
+      const typing = active instanceof HTMLInputElement || active instanceof HTMLTextAreaElement || active?.isContentEditable;
+      if (!typing && state.cutExplorerPaths.length) {
+        event.preventDefault();
+        void pasteCutExplorerEntries();
+        return;
+      }
+    }
     if (event.key === "Escape") {
       hideContextMenu();
     }
@@ -3828,8 +3811,6 @@ function wireEvents() {
 }
 
 async function initialize() {
-  installRendererDragDebug();
-  installBrowserUploadBridge();
   const defaults = await window.fuzzyApi.getDefaults();
   setMoodleHome(defaults.moodleHome);
   state.dashboardAutoload = Boolean(defaults.dashboardAutoload);
