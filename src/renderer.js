@@ -55,6 +55,8 @@ const state = {
   explorerSelectionAnchorPath: "",
   draggedExplorerPaths: [],
   explorerDropTargetPath: "",
+  browserUploadDropTabId: "",
+  browserUploadArmed: false,
   downloadDraft: null,
   renameDraft: null,
   contextMenu: null,
@@ -441,6 +443,133 @@ function getActiveTab() {
 
 function getTabById(tabId) {
   return state.tabs.find((tab) => tab.id === tabId) ?? null;
+}
+
+function getUploadSupportForTab(tab) {
+  if (!tab || tab.kind !== "browser") {
+    return null;
+  }
+
+  try {
+    const parsed = new URL(tab.url || tab.courseUrl || "");
+    const hostname = parsed.hostname.toLowerCase();
+    if (/moodle(?:\d{4})?\.wakayama-u\.ac\.jp$/i.test(hostname)) {
+      return { kind: "moodle", label: "Moodle" };
+    }
+    if (hostname === "gemini.google.com") {
+      return { kind: "gemini", label: "Gemini" };
+    }
+    if (hostname === "notebooklm.google.com") {
+      return { kind: "notebooklm", label: "NotebookLM" };
+    }
+  } catch (_error) {
+    return null;
+  }
+
+  return null;
+}
+
+function getDraggedUploadEntries() {
+  return state.draggedExplorerPaths
+    .map((entryPath) => findExplorerEntryByPath(entryPath))
+    .filter((entry) => entry && !entry.isDirectory);
+}
+
+function clearBrowserUploadDropState() {
+  state.browserUploadDropTabId = "";
+  state.browserUploadArmed = false;
+  elements.browserContent.querySelectorAll(".browser-upload-dropzone").forEach((overlay) => {
+    overlay.classList.remove("active");
+  });
+}
+
+function syncBrowserUploadDropState(preferredTabId = "") {
+  const supportedVisibleTabIds = new Set(
+    state.tabs
+      .filter((tab) => {
+        if (!getUploadSupportForTab(tab) || !tab.contentEl?.classList.contains("visible")) {
+          return false;
+        }
+        return true;
+      })
+      .map((tab) => tab.id)
+  );
+
+  const nextActiveTabId = preferredTabId && supportedVisibleTabIds.has(preferredTabId)
+    ? preferredTabId
+    : (supportedVisibleTabIds.has(state.browserUploadDropTabId) ? state.browserUploadDropTabId : "");
+
+  state.browserUploadDropTabId = nextActiveTabId;
+  elements.browserContent.querySelectorAll(".browser-upload-dropzone").forEach((overlay) => {
+    const tabId = overlay.dataset.tabId || "";
+    const isSupportedVisible = supportedVisibleTabIds.has(tabId);
+    const isActive = nextActiveTabId ? nextActiveTabId === tabId : isSupportedVisible && state.browserUploadArmed;
+    overlay.classList.toggle("active", isActive);
+  });
+}
+
+async function uploadDraggedFilesToTab(tab) {
+  const support = getUploadSupportForTab(tab);
+  if (!support) {
+    throw new Error("このタブはドラッグアップロードにまだ対応していません。");
+  }
+
+  const fileEntries = getDraggedUploadEntries();
+  if (!fileEntries.length) {
+    throw new Error("アップロードできるファイルを選択してください。フォルダは対象外です。");
+  }
+
+  return await window.fuzzyApi.uploadFilesToTab({
+    tabId: tab.id,
+    tabUrl: tab.url,
+    filePaths: fileEntries.map((entry) => entry.path),
+  });
+}
+
+function bindBrowserUploadDropTarget(target, tab) {
+  target.addEventListener("dragover", (event) => {
+    if (!state.draggedExplorerPaths.length) {
+      return;
+    }
+    const support = getUploadSupportForTab(tab);
+    if (!support || !getDraggedUploadEntries().length) {
+      return;
+    }
+    event.preventDefault();
+    event.dataTransfer.dropEffect = "copy";
+    syncBrowserUploadDropState(tab.id);
+  });
+
+  target.addEventListener("dragleave", (event) => {
+    if (event.relatedTarget && target.contains?.(event.relatedTarget)) {
+      return;
+    }
+    if (state.browserUploadDropTabId === tab.id) {
+      syncBrowserUploadDropState("");
+    }
+  });
+
+  target.addEventListener("drop", async (event) => {
+    if (!state.draggedExplorerPaths.length) {
+      return;
+    }
+    const support = getUploadSupportForTab(tab);
+    if (!support) {
+      return;
+    }
+    event.preventDefault();
+    event.stopPropagation();
+    const draggedPaths = [...state.draggedExplorerPaths];
+    clearBrowserUploadDropState();
+    try {
+      const result = await uploadDraggedFilesToTab(tab);
+      toast(`${support.label} に ${result?.count || draggedPaths.length} 件のファイルを渡しました`, "success");
+    } catch (error) {
+      toast(error.message, "error");
+    } finally {
+      state.draggedExplorerPaths = [];
+    }
+  });
 }
 
 function clamp(value, min, max) {
@@ -1219,7 +1348,6 @@ function ensureDashboardLoaded() {
   renderTimeline();
   elements.dashboardWebview.src = state.dashboardUrl;
   state.dashboardLoaded = true;
-  scheduleDashboardTimelinePull();
 }
 
 function isLoggedInMoodleHome(context) {
@@ -1281,12 +1409,7 @@ async function enableDashboardAutoload() {
     message: "Refreshing dashboard session...",
   };
   renderTimeline();
-  try {
-    elements.dashboardWebview.loadURL(state.dashboardUrl);
-    scheduleDashboardTimelinePull();
-  } catch (_error) {
-    // Ignore refresh failures; the next manual refresh can retry.
-  }
+  reloadDashboardWebview();
 }
 
 function scheduleDashboardRefresh() {
@@ -1295,13 +1418,26 @@ function scheduleDashboardRefresh() {
   }
   clearTimeout(scheduleDashboardRefresh.timer);
   scheduleDashboardRefresh.timer = setTimeout(() => {
-    try {
-      elements.dashboardWebview.loadURL(state.dashboardUrl);
-      scheduleDashboardTimelinePull();
-    } catch (_error) {
-      // Ignore refresh failures.
-    }
+    state.timelineStatus = {
+      state: "loading",
+      message: "Refreshing dashboard session...",
+    };
+    renderTimeline();
+    reloadDashboardWebview();
   }, 400);
+}
+
+function reloadDashboardWebview() {
+  try {
+    const currentUrl = elements.dashboardWebview.getURL?.() || "";
+    if (currentUrl && currentUrl === state.dashboardUrl) {
+      elements.dashboardWebview.reloadIgnoringCache();
+      return;
+    }
+    elements.dashboardWebview.loadURL(state.dashboardUrl);
+  } catch (_error) {
+    // Ignore refresh failures; the next manual refresh can retry.
+  }
 }
 
 function scheduleDashboardTimelinePull() {
@@ -1653,6 +1789,15 @@ async function ensureCourseMapping(tab) {
 function mountBrowserLikeTab(tab, usePreload = true) {
   const contentEl = document.createElement("div");
   contentEl.className = "browser-surface";
+  contentEl.dataset.tabId = tab.id;
+
+  const uploadSupport = getUploadSupportForTab(tab);
+  const uploadOverlay = document.createElement("div");
+  uploadOverlay.className = "browser-upload-dropzone";
+  uploadOverlay.dataset.tabId = tab.id;
+  uploadOverlay.innerHTML = uploadSupport
+    ? `<strong>${escapeHtml(uploadSupport.label)} へアップロード</strong><span>ファイルをここでドロップ</span>`
+    : `<strong>ドラッグアップロード非対応</strong><span>このタブでは使えません</span>`;
 
   const webview = document.createElement("webview");
   webview.className = "browser-view";
@@ -1775,8 +1920,13 @@ function mountBrowserLikeTab(tab, usePreload = true) {
 
   tab.webviewEl = webview;
   tab.contentEl = contentEl;
+  contentEl.appendChild(uploadOverlay);
   contentEl.appendChild(webview);
   elements.browserContent.appendChild(contentEl);
+  bindBrowserUploadDropTarget(contentEl, tab);
+  bindBrowserUploadDropTarget(uploadOverlay, tab);
+  bindBrowserUploadDropTarget(webview, tab);
+
   renderBrowserLayout();
 }
 
@@ -2059,13 +2209,30 @@ async function duplicateExplorerEntry(entry) {
   toast(`${entry.name} をコピーしました`, "success");
 }
 
-function showRenameDialog(entry) {
-  state.renameDraft = entry;
+function showRenameDialog(entry, options = {}) {
+  state.renameDraft = {
+    ...entry,
+    openPathAfterSave: options.openPathAfterSave || "",
+  };
   setDialogFocusLock(true);
   elements.renameFileNameInput.value = entry.name;
   elements.renameCurrentName.textContent = `現在の名前: ${entry.name}`;
   elements.renameDialog.showModal();
   focusDialogInput(elements.renameFileNameInput, { select: true, selectFileStem: true });
+}
+
+function showRenameDialogForPath(targetPath) {
+  if (!targetPath) {
+    return false;
+  }
+  const entry = findExplorerEntryByPath(targetPath);
+  if (!entry) {
+    return false;
+  }
+  setExplorerSelection([entry.path], entry.path);
+  renderExplorerSelectionState();
+  showRenameDialog(entry);
+  return true;
 }
 
 async function deleteExplorerEntry(entry) {
@@ -2409,13 +2576,16 @@ function renderDirectory(entries) {
       state.draggedExplorerPaths = state.selectedExplorerPaths.has(entry.path)
         ? [...state.selectedExplorerPaths]
         : [entry.path];
-      event.dataTransfer.effectAllowed = "move";
+      event.dataTransfer.effectAllowed = getDraggedUploadEntries().length ? "copyMove" : "move";
       event.dataTransfer.setData("text/plain", state.draggedExplorerPaths.join("\n"));
+      state.browserUploadArmed = getDraggedUploadEntries().length > 0;
+      syncBrowserUploadDropState("");
     });
 
     row.addEventListener("dragend", () => {
       state.draggedExplorerPaths = [];
       state.explorerDropTargetPath = "";
+      clearBrowserUploadDropState();
       renderDirectory(state.explorerEntries);
     });
 
@@ -3036,9 +3206,22 @@ function wireEvents() {
     }
     state.mappingPromptedCourses.delete(mapping.courseName);
     renderMappings();
-    await loadDirectory(mapping.folderPath, { syncBrowserFromDirectory: false });
+    await loadDirectory(mapping.createdNewFolder ? state.rootDir : mapping.folderPath, { syncBrowserFromDirectory: false });
     elements.mappingDialog.close();
-    toast("コース用フォルダを作成しました", "success");
+    if (mapping.createdNewFolder) {
+      const renamed = showRenameDialogForPath(mapping.folderPath);
+      if (renamed && state.renameDraft) {
+        state.renameDraft.openPathAfterSave = mapping.folderPath;
+      }
+      toast(
+        renamed
+          ? "コース用フォルダを作成しました。続けて名前を変更できます"
+          : "コース用フォルダを作成しました",
+        "success",
+      );
+      return;
+    }
+    toast("既存のコース用フォルダを紐づけました", "success");
   });
 
   document.querySelector("#mapping-choose-folder").addEventListener("click", async () => {
@@ -3192,9 +3375,10 @@ function wireEvents() {
       return;
     }
 
-    const previousName = state.renameDraft.name;
+    const renameDraft = { ...state.renameDraft };
+    const previousName = renameDraft.name;
     const renameResult = await window.fuzzyApi.renameExplorerEntry({
-      targetPath: state.renameDraft.path,
+      targetPath: renameDraft.path,
       nextName,
     });
     if (Array.isArray(renameResult?.mappings)) {
@@ -3203,7 +3387,10 @@ function wireEvents() {
       renderSubmissionFolderButton();
     }
     elements.renameDialog.close();
-    await loadDirectory(state.currentDir || state.rootDir, { syncBrowserFromDirectory: false });
+    const nextDirectory = renameDraft.openPathAfterSave
+      ? renameResult?.path || renameDraft.openPathAfterSave
+      : state.currentDir || state.rootDir;
+    await loadDirectory(nextDirectory, { syncBrowserFromDirectory: false });
     toast(`${previousName} の名前を変更しました`, "success");
   });
   elements.renameForm.addEventListener("submit", (event) => {

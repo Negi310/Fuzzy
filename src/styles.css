@@ -102,6 +102,36 @@ button {
   display: block;
 }
 
+.browser-upload-dropzone {
+  position: absolute;
+  inset: 18px;
+  z-index: 5;
+  display: none;
+  place-items: center;
+  gap: 8px;
+  border: 2px dashed #6f9ddd;
+  border-radius: 18px;
+  background: rgba(240, 247, 255, 0.94);
+  color: #20457a;
+  text-align: center;
+  pointer-events: none;
+}
+
+.browser-upload-dropzone.active {
+  display: grid;
+  pointer-events: auto;
+}
+
+.browser-upload-dropzone strong {
+  font-size: 22px;
+  font-weight: 700;
+}
+
+.browser-upload-dropzone span {
+  font-size: 14px;
+  color: #4a6488;
+}
+
 .browser-splitter {
   position: absolute;
   top: 0;

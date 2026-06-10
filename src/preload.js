@@ -24,6 +24,7 @@ contextBridge.exposeInMainWorld("fuzzyApi", {
   openRemoteFileTab: (payload) => ipcRenderer.invoke("file:open-remote", payload),
   cleanupPreviewFile: (targetPath) => ipcRenderer.invoke("preview:cleanup", targetPath),
   startExplorerDrag: (targetPath) => ipcRenderer.send("explorer:start-drag", targetPath),
+  uploadFilesToTab: (payload) => ipcRenderer.invoke("webview:upload-files", payload),
   duplicateExplorerEntry: (targetPath) => ipcRenderer.invoke("explorer:duplicate", targetPath),
   createExplorerEntry: (payload) => ipcRenderer.invoke("explorer:create", payload),
   openExplorerEntryWith: (payload) => ipcRenderer.invoke("explorer:open-with", payload),
