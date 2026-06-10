@@ -54,9 +54,11 @@ const state = {
   selectedExplorerPaths: new Set(),
   explorerSelectionAnchorPath: "",
   draggedExplorerPaths: [],
+  pendingBrowserUploadPaths: [],
   explorerDropTargetPath: "",
   browserUploadDropTabId: "",
   browserUploadArmed: false,
+  browserUploadResetTimer: 0,
   downloadDraft: null,
   renameDraft: null,
   contextMenu: null,
@@ -470,12 +472,40 @@ function getUploadSupportForTab(tab) {
 }
 
 function getDraggedUploadEntries() {
-  return state.draggedExplorerPaths
+  const sourcePaths = state.pendingBrowserUploadPaths.length
+    ? state.pendingBrowserUploadPaths
+    : state.draggedExplorerPaths;
+  return sourcePaths
     .map((entryPath) => findExplorerEntryByPath(entryPath))
     .filter((entry) => entry && !entry.isDirectory);
 }
 
+function scheduleBrowserUploadReset(delay = 15000) {
+  if (state.browserUploadResetTimer) {
+    window.clearTimeout(state.browserUploadResetTimer);
+  }
+  state.browserUploadResetTimer = window.setTimeout(() => {
+    state.pendingBrowserUploadPaths = [];
+    clearBrowserUploadDropState();
+  }, delay);
+}
+
+function clearPendingBrowserUploadPaths() {
+  if (state.browserUploadResetTimer) {
+    window.clearTimeout(state.browserUploadResetTimer);
+    state.browserUploadResetTimer = 0;
+  }
+  state.pendingBrowserUploadPaths = [];
+}
+
 function clearBrowserUploadDropState() {
+  clearPendingBrowserUploadPaths();
+  for (const tab of state.tabs) {
+    if (tab.nativeUploadWatchTimer) {
+      window.clearInterval(tab.nativeUploadWatchTimer);
+      tab.nativeUploadWatchTimer = 0;
+    }
+  }
   state.browserUploadDropTabId = "";
   state.browserUploadArmed = false;
   elements.browserContent.querySelectorAll(".browser-upload-dropzone").forEach((overlay) => {
@@ -503,18 +533,357 @@ function syncBrowserUploadDropState(preferredTabId = "") {
   elements.browserContent.querySelectorAll(".browser-upload-dropzone").forEach((overlay) => {
     const tabId = overlay.dataset.tabId || "";
     const isSupportedVisible = supportedVisibleTabIds.has(tabId);
-    const isActive = nextActiveTabId ? nextActiveTabId === tabId : isSupportedVisible && state.browserUploadArmed;
+    const tab = getTabById(tabId);
+    const support = getUploadSupportForTab(tab);
+    const needsTargeting = support?.kind === "moodle";
+    const baseActive = nextActiveTabId ? nextActiveTabId === tabId : isSupportedVisible && state.browserUploadArmed;
+    const isActive = baseActive && (!needsTargeting || overlay.classList.contains("targeted"));
     overlay.classList.toggle("active", isActive);
   });
 }
 
-async function uploadDraggedFilesToTab(tab) {
+function applyBrowserUploadDropzoneBounds(tab, bounds = null) {
+  const overlay = tab?.uploadOverlayEl;
+  if (!overlay) {
+    return;
+  }
+
+  tab.uploadDropBounds = bounds;
+  if (!bounds) {
+    overlay.classList.remove("targeted");
+    overlay.style.removeProperty("--dropzone-left");
+    overlay.style.removeProperty("--dropzone-top");
+    overlay.style.removeProperty("--dropzone-width");
+    overlay.style.removeProperty("--dropzone-height");
+    return;
+  }
+
+  overlay.classList.add("targeted");
+  overlay.style.setProperty("--dropzone-left", `${Math.round(bounds.left)}px`);
+  overlay.style.setProperty("--dropzone-top", `${Math.round(bounds.top)}px`);
+  overlay.style.setProperty("--dropzone-width", `${Math.round(bounds.width)}px`);
+  overlay.style.setProperty("--dropzone-height", `${Math.round(bounds.height)}px`);
+}
+
+async function refreshBrowserUploadDropzone(tab) {
+  const support = getUploadSupportForTab(tab);
+  if (!support) {
+    applyBrowserUploadDropzoneBounds(tab, null);
+    return null;
+  }
+
+  if (support.kind !== "moodle") {
+    applyBrowserUploadDropzoneBounds(tab, null);
+    return null;
+  }
+
+  const webview = tab?.webviewEl;
+  const contentEl = tab?.contentEl;
+  if (!webview || !contentEl) {
+    applyBrowserUploadDropzoneBounds(tab, null);
+    return null;
+  }
+
+  const requestId = (tab.uploadDropzoneRequestId || 0) + 1;
+  tab.uploadDropzoneRequestId = requestId;
+
+  try {
+    const rect = await webview.executeJavaScript(`
+      (() => {
+        const normalize = (value) => String(value || "").replace(/\\s+/g, " ").trim();
+        const expectedText = "あなたはファイルをここにドラッグ＆ドロップして追加できます。";
+        const isVisible = (node) => {
+          const style = window.getComputedStyle(node);
+          if (style.display === "none" || style.visibility === "hidden" || style.opacity === "0") {
+            return false;
+          }
+          const rect = node.getBoundingClientRect();
+          return rect.width > 0 && rect.height > 0;
+        };
+        const exactMessage = [...document.querySelectorAll(".dndupload-message, .filemanager .fp-content-center, .filemanager-container .fp-content-center")]
+          .find((node) => node instanceof HTMLElement && isVisible(node) && normalize(node.textContent).includes(expectedText));
+        const selectors = [
+          ".filemanager .dndupload-message",
+          ".filemanager-container .dndupload-message",
+          ".fp-content-center .dndupload-message",
+          ".filemanager",
+          ".filemanager-container",
+        ];
+        const fallback = selectors
+          .map((selector) => document.querySelector(selector))
+          .find((node) => node instanceof HTMLElement && isVisible(node));
+        const target = exactMessage || fallback;
+        if (!target) {
+          return null;
+        }
+        const rect = target.getBoundingClientRect();
+        return {
+          left: rect.left,
+          top: rect.top,
+          width: rect.width,
+          height: rect.height,
+        };
+      })();
+    `);
+
+    if (tab.uploadDropzoneRequestId !== requestId) {
+      return tab.uploadDropBounds || null;
+    }
+
+    if (!rect?.width || !rect?.height) {
+      applyBrowserUploadDropzoneBounds(tab, null);
+      return null;
+    }
+
+    const contentRect = contentEl.getBoundingClientRect();
+    const webviewRect = webview.getBoundingClientRect();
+    const left = Math.max(0, rect.left + (webviewRect.left - contentRect.left));
+    const top = Math.max(0, rect.top + (webviewRect.top - contentRect.top));
+    const right = Math.min(contentRect.width, left + rect.width);
+    const bottom = Math.min(contentRect.height, top + rect.height);
+    const bounds = {
+      left,
+      top,
+      width: Math.max(0, right - left),
+      height: Math.max(0, bottom - top),
+    };
+
+    if (!bounds.width || !bounds.height) {
+      applyBrowserUploadDropzoneBounds(tab, null);
+      return null;
+    }
+
+    applyBrowserUploadDropzoneBounds(tab, bounds);
+    if (state.browserUploadArmed && state.browserUploadDropTabId === tab.id) {
+      syncBrowserUploadDropState(tab.id);
+    }
+    return bounds;
+  } catch (_error) {
+    if (tab.uploadDropzoneRequestId === requestId) {
+      applyBrowserUploadDropzoneBounds(tab, null);
+    }
+    return null;
+  }
+}
+
+function isPointInsideBrowserUploadDropzone(tab, clientX, clientY) {
+  const bounds = tab?.uploadDropBounds;
+  const contentEl = tab?.contentEl;
+  if (!bounds || !contentEl) {
+    return false;
+  }
+
+  const contentRect = contentEl.getBoundingClientRect();
+  const x = clientX - contentRect.left;
+  const y = clientY - contentRect.top;
+  return (
+    x >= bounds.left &&
+    x <= bounds.left + bounds.width &&
+    y >= bounds.top &&
+    y <= bounds.top + bounds.height
+  );
+}
+
+function primeBrowserUploadDropzones() {
+  for (const tab of state.tabs) {
+    if (!tab.contentEl?.classList.contains("visible")) {
+      continue;
+    }
+    if (getUploadSupportForTab(tab)?.kind !== "moodle") {
+      continue;
+    }
+    void refreshBrowserUploadDropzone(tab);
+  }
+}
+
+function installRendererDragDebug() {
+  const emit = (phase, event) => {
+    const types = event.dataTransfer?.types ? [...event.dataTransfer.types].join(", ") : "";
+    const files = event.dataTransfer?.files?.length ?? 0;
+    toast(`[APP-DND:${phase}] files=${files} types=${types}`.slice(0, 160), files > 0 ? "success" : "warn");
+  };
+  window.addEventListener("dragenter", (event) => emit("dragenter", event), true);
+  window.addEventListener("dragover", (event) => emit("dragover", event), true);
+  window.addEventListener("drop", (event) => emit("drop", event), true);
+}
+
+function installBrowserUploadBridge() {
+  window.addEventListener("dragover", (event) => {
+    if (!state.browserUploadArmed || !state.pendingBrowserUploadPaths.length) {
+      return;
+    }
+    const tab = getTabById(state.browserUploadDropTabId) || getActiveTab();
+    if (!tab || getUploadSupportForTab(tab)?.kind !== "moodle") {
+      return;
+    }
+    if (!isPointInsideBrowserUploadDropzone(tab, event.clientX, event.clientY)) {
+      return;
+    }
+    event.preventDefault();
+    event.dataTransfer.dropEffect = "copy";
+    syncBrowserUploadDropState(tab.id);
+  }, true);
+
+  window.addEventListener("drop", async (event) => {
+    if (!state.browserUploadArmed || !state.pendingBrowserUploadPaths.length) {
+      return;
+    }
+    const tab = getTabById(state.browserUploadDropTabId) || getActiveTab();
+    if (!tab || getUploadSupportForTab(tab)?.kind !== "moodle") {
+      return;
+    }
+    if (!isPointInsideBrowserUploadDropzone(tab, event.clientX, event.clientY)) {
+      return;
+    }
+    event.preventDefault();
+    event.stopPropagation();
+
+    const draggedPaths = [...state.pendingBrowserUploadPaths];
+    toast(`[UPLOAD] start paths=${draggedPaths.length}`, "info");
+    try {
+      const result = await uploadDraggedFilesToTab(tab, draggedPaths);
+      toast(`[UPLOAD] ok count=${result?.count || draggedPaths.length} submitted=${result?.submitted ? "yes" : "no"}`, "success");
+    } catch (error) {
+      toast(`[UPLOAD] error ${error.message}`.slice(0, 200), "error");
+    } finally {
+      clearBrowserUploadDropState();
+      state.draggedExplorerPaths = [];
+      clearPendingBrowserUploadPaths();
+    }
+  }, true);
+}
+
+function startMoodleNativeUploadWatch(tab) {
+  const webview = tab?.webviewEl;
+  if (!webview || getUploadSupportForTab(tab)?.kind !== "moodle") {
+    return;
+  }
+
+  if (tab.nativeUploadWatchTimer) {
+    window.clearInterval(tab.nativeUploadWatchTimer);
+  }
+  const startedAt = Date.now();
+  tab.nativeUploadWatchTimer = window.setInterval(async () => {
+    if (Date.now() - startedAt > 20000) {
+      window.clearInterval(tab.nativeUploadWatchTimer);
+      tab.nativeUploadWatchTimer = 0;
+      return;
+    }
+
+    try {
+      const result = await webview.executeJavaScript(`
+        (() => {
+          const isVisible = (element) => {
+            if (!(element instanceof HTMLElement)) {
+              return false;
+            }
+            const style = window.getComputedStyle(element);
+            if (style.display === "none" || style.visibility === "hidden" || style.opacity === "0" || element.hasAttribute("disabled")) {
+              return false;
+            }
+            const rect = element.getBoundingClientRect();
+            return rect.width > 0 && rect.height > 0;
+          };
+          const normalize = (value) => String(value || "").replace(/\\s+/g, " ").trim().toLowerCase();
+          const clickMatching = (root, selectors, labels = []) => {
+            const candidates = [...root.querySelectorAll(selectors.join(", "))];
+            for (const candidate of candidates) {
+              if (!isVisible(candidate)) {
+                continue;
+              }
+              const label = normalize(
+                candidate.getAttribute("aria-label") ||
+                candidate.getAttribute("title") ||
+                candidate.textContent ||
+                candidate.value
+              );
+              if (labels.some((entry) => label.includes(entry))) {
+                candidate.click();
+                return true;
+              }
+            }
+            return false;
+          };
+          const submitForm = (form) => {
+            if (!(form instanceof HTMLFormElement)) {
+              return false;
+            }
+            const submitControl = form.querySelector("button[type='submit'], input[type='submit']");
+            if (submitControl instanceof HTMLElement && isVisible(submitControl)) {
+              submitControl.click();
+              return true;
+            }
+            if (typeof form.requestSubmit === "function") {
+              form.requestSubmit();
+              return true;
+            }
+            return false;
+          };
+
+          const inputs = [...document.querySelectorAll("input[type='file']")].filter((input) => input.files?.length);
+          const input = inputs.find((candidate) => candidate.closest(".filemanager, .filemanager-container, .filepicker, .fp-formset")) || inputs[0] || null;
+          const signature = input ? [...input.files].map((file) => [file.name, file.size, file.lastModified].join(":")).join("|") : "";
+          if (!input) {
+            return { found: false };
+          }
+          if (input.dataset.fuzzyAutoSubmitted === "1" && input.dataset.fuzzyAutoSubmittedSignature === signature) {
+            return { found: false };
+          }
+
+          input.dataset.fuzzyAutoSubmitted = "1";
+          input.dataset.fuzzyAutoSubmittedSignature = signature;
+          input.dispatchEvent(new Event("input", { bubbles: true }));
+          input.dispatchEvent(new Event("change", { bubbles: true }));
+          const root = input.closest(".moodle-dialogue, .filepicker, .filemanager, .fp-formset, form") || document;
+          const labels = [
+            "upload",
+            "save as",
+            "submit",
+            "continue",
+            "add",
+            "\u3053\u306e\u30d5\u30a1\u30a4\u30eb\u3092\u30a2\u30c3\u30d7\u30ed\u30fc\u30c9",
+            "\u30a2\u30c3\u30d7\u30ed\u30fc\u30c9",
+            "\u4fdd\u5b58\u3059\u308b",
+            "\u8ffd\u52a0\u3059\u308b",
+            "\u63d0\u51fa\u3092\u8ffd\u52a0",
+          ].map((label) => label.toLowerCase());
+          const submitted = (
+            clickMatching(root, ["button", "input[type='submit']", "a[role='button']", ".fp-upload-btn", ".fp-btn-add"], labels) ||
+            clickMatching(document, ["button", "input[type='submit']", "a[role='button']", ".fp-upload-btn", ".fp-btn-add"], labels) ||
+            submitForm(input.closest("form")) ||
+            submitForm(root.closest("form"))
+          );
+          window.setTimeout(() => {
+            if (input.dataset.fuzzyAutoSubmittedSignature === signature) {
+              input.dataset.fuzzyAutoSubmitted = "";
+              input.dataset.fuzzyAutoSubmittedSignature = "";
+            }
+          }, 2500);
+          return { found: true, submitted };
+        })();
+      `);
+
+      if (result?.found) {
+        window.clearInterval(tab.nativeUploadWatchTimer);
+        tab.nativeUploadWatchTimer = 0;
+        clearBrowserUploadDropState();
+      }
+    } catch (_error) {
+      // Ignore transient page access failures while dragging.
+    }
+  }, 150);
+}
+
+async function uploadDraggedFilesToTab(tab, sourcePaths = null) {
   const support = getUploadSupportForTab(tab);
   if (!support) {
     throw new Error("このタブはドラッグアップロードにまだ対応していません。");
   }
 
-  const fileEntries = getDraggedUploadEntries();
+  const fileEntries = (Array.isArray(sourcePaths) && sourcePaths.length
+    ? sourcePaths.map((entryPath) => findExplorerEntryByPath(entryPath))
+    : getDraggedUploadEntries())
+    .filter((entry) => entry && !entry.isDirectory);
   if (!fileEntries.length) {
     throw new Error("アップロードできるファイルを選択してください。フォルダは対象外です。");
   }
@@ -527,17 +896,24 @@ async function uploadDraggedFilesToTab(tab) {
 }
 
 function bindBrowserUploadDropTarget(target, tab) {
+  const support = getUploadSupportForTab(tab);
+  if (support?.kind === "moodle" && target !== tab.uploadOverlayEl) {
+    return;
+  }
   target.addEventListener("dragover", (event) => {
     if (!state.draggedExplorerPaths.length) {
       return;
     }
-    const support = getUploadSupportForTab(tab);
     if (!support || !getDraggedUploadEntries().length) {
+      return;
+    }
+    if (support.kind === "moodle" && !tab.uploadOverlayEl?.classList.contains("targeted")) {
       return;
     }
     event.preventDefault();
     event.dataTransfer.dropEffect = "copy";
     syncBrowserUploadDropState(tab.id);
+    void refreshBrowserUploadDropzone(tab);
   });
 
   target.addEventListener("dragleave", (event) => {
@@ -553,21 +929,26 @@ function bindBrowserUploadDropTarget(target, tab) {
     if (!state.draggedExplorerPaths.length) {
       return;
     }
-    const support = getUploadSupportForTab(tab);
     if (!support) {
+      return;
+    }
+    if (support.kind === "moodle" && !isPointInsideBrowserUploadDropzone(tab, event.clientX, event.clientY)) {
       return;
     }
     event.preventDefault();
     event.stopPropagation();
-    const draggedPaths = [...state.draggedExplorerPaths];
-    clearBrowserUploadDropState();
+    const draggedPaths = state.pendingBrowserUploadPaths.length
+      ? [...state.pendingBrowserUploadPaths]
+      : [...state.draggedExplorerPaths];
     try {
-      const result = await uploadDraggedFilesToTab(tab);
+      const result = await uploadDraggedFilesToTab(tab, draggedPaths);
       toast(`${support.label} に ${result?.count || draggedPaths.length} 件のファイルを渡しました`, "success");
     } catch (error) {
       toast(error.message, "error");
     } finally {
+      clearBrowserUploadDropState();
       state.draggedExplorerPaths = [];
+      clearPendingBrowserUploadPaths();
     }
   });
 }
@@ -1119,6 +1500,7 @@ function renderSidePanelVisibility() {
   elements.dockToggleButton.textContent = state.panelVisible ? "＞" : "＜";
   elements.sidePanelTabActions?.classList.toggle("is-hidden", !state.panelVisible);
   positionDockToggle();
+  renderBrowserLayout();
 }
 
 function positionDockToggle() {
@@ -1796,7 +2178,7 @@ function mountBrowserLikeTab(tab, usePreload = true) {
   uploadOverlay.className = "browser-upload-dropzone";
   uploadOverlay.dataset.tabId = tab.id;
   uploadOverlay.innerHTML = uploadSupport
-    ? `<strong>${escapeHtml(uploadSupport.label)} へアップロード</strong><span>ファイルをここでドロップ</span>`
+    ? `<strong>あなたはファイルをここにドラッグ＆ドロップして追加できます。</strong><span>${escapeHtml(uploadSupport.label)} の点線枠に直接アップロードします</span>`
     : `<strong>ドラッグアップロード非対応</strong><span>このタブでは使えません</span>`;
 
   const webview = document.createElement("webview");
@@ -1816,6 +2198,7 @@ function mountBrowserLikeTab(tab, usePreload = true) {
 
   webview.addEventListener("did-finish-load", () => {
     syncTabFromWebview(tab);
+    void refreshBrowserUploadDropzone(tab);
     if (tab.id === state.activeTabId) {
       focusBrowserSurface(tab);
     }
@@ -1823,10 +2206,12 @@ function mountBrowserLikeTab(tab, usePreload = true) {
 
   webview.addEventListener("did-navigate", () => {
     syncTabFromWebview(tab);
+    void refreshBrowserUploadDropzone(tab);
   });
 
   webview.addEventListener("did-navigate-in-page", () => {
     syncTabFromWebview(tab);
+    void refreshBrowserUploadDropzone(tab);
   });
 
   webview.addEventListener("dom-ready", () => {
@@ -1882,6 +2267,15 @@ function mountBrowserLikeTab(tab, usePreload = true) {
       return;
     }
 
+    if (event.channel === "dnd-debug") {
+      const phase = payload.phase || "drag";
+      const count = Number(payload.fileCount || 0);
+      const types = Array.isArray(payload.types) ? payload.types.join(", ") : "";
+      const targetText = payload.target?.text ? ` / ${payload.target.text}` : "";
+      toast(`[DND:${phase}] files=${count} types=${types}${targetText}`.slice(0, 180), count > 0 ? "success" : "warn");
+      return;
+    }
+
     if (event.channel !== "page-context") {
       return;
     }
@@ -1920,12 +2314,14 @@ function mountBrowserLikeTab(tab, usePreload = true) {
 
   tab.webviewEl = webview;
   tab.contentEl = contentEl;
+  tab.uploadOverlayEl = uploadOverlay;
   contentEl.appendChild(uploadOverlay);
   contentEl.appendChild(webview);
   elements.browserContent.appendChild(contentEl);
   bindBrowserUploadDropTarget(contentEl, tab);
   bindBrowserUploadDropTarget(uploadOverlay, tab);
   bindBrowserUploadDropTarget(webview, tab);
+  void refreshBrowserUploadDropzone(tab);
 
   renderBrowserLayout();
 }
@@ -2578,14 +2974,26 @@ function renderDirectory(entries) {
         : [entry.path];
       event.dataTransfer.effectAllowed = getDraggedUploadEntries().length ? "copyMove" : "move";
       event.dataTransfer.setData("text/plain", state.draggedExplorerPaths.join("\n"));
+      state.pendingBrowserUploadPaths = [...state.draggedExplorerPaths];
+      if (!entry.isDirectory) {
+        window.fuzzyApi.startExplorerDrag(entry.path);
+      }
       state.browserUploadArmed = getDraggedUploadEntries().length > 0;
+      if (state.browserUploadArmed) {
+        primeBrowserUploadDropzones();
+        scheduleBrowserUploadReset();
+      }
       syncBrowserUploadDropState("");
     });
 
     row.addEventListener("dragend", () => {
       state.draggedExplorerPaths = [];
       state.explorerDropTargetPath = "";
-      clearBrowserUploadDropState();
+      if (state.browserUploadArmed) {
+        scheduleBrowserUploadReset(4000);
+      } else {
+        clearBrowserUploadDropState();
+      }
       renderDirectory(state.explorerEntries);
     });
 
@@ -2615,6 +3023,7 @@ function renderDirectory(entries) {
       event.preventDefault();
       const draggedPaths = [...state.draggedExplorerPaths];
       state.draggedExplorerPaths = [];
+      clearPendingBrowserUploadPaths();
       state.explorerDropTargetPath = "";
       renderExplorerDropTargetState();
       try {
@@ -3419,6 +3828,8 @@ function wireEvents() {
 }
 
 async function initialize() {
+  installRendererDragDebug();
+  installBrowserUploadBridge();
   const defaults = await window.fuzzyApi.getDefaults();
   setMoodleHome(defaults.moodleHome);
   state.dashboardAutoload = Boolean(defaults.dashboardAutoload);
