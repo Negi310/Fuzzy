@@ -1453,8 +1453,8 @@ function createWindow() {
   mainWindow = new BrowserWindow({
     width: 1540,
     height: 960,
-    minWidth: 1280,
-    minHeight: 760,
+    minWidth: 680,
+    minHeight: 560,
     title: "Fuzitter",
     backgroundColor: "#0b1020",
     icon: path.join(__dirname, "..", "assets", "fuzitter.ico"),
@@ -1563,13 +1563,78 @@ async function findUploadInputNodeId(targetContents, uploadKind) {
         return bucket;
       };
 
+      const findVisibleMoodleDropzone = () => {
+        const expectedText = "あなたはファイルをここにドラッグ＆ドロップして追加できます。";
+        const normalize = (value) => String(value || "").replace(/\\s+/g, " ").trim();
+        const selectors = [
+          ".dndupload-message",
+          ".filemanager .fp-content-center",
+          ".filemanager-container .fp-content-center",
+          ".filemanager",
+          ".filemanager-container",
+        ];
+        for (const doc of frameDocs()) {
+          const exactMessage = [...doc.querySelectorAll(".dndupload-message, .filemanager .fp-content-center, .filemanager-container .fp-content-center")]
+            .find((node) => node instanceof HTMLElement && isVisible(node) && normalize(node.textContent).includes(expectedText));
+          if (exactMessage) {
+            return exactMessage;
+          }
+          for (const selector of selectors) {
+            const match = doc.querySelector(selector);
+            if (match instanceof HTMLElement && isVisible(match)) {
+              return match;
+            }
+          }
+        }
+        return null;
+      };
+
+      const scoreInput = (candidate) => {
+        if (!(candidate instanceof HTMLInputElement) || candidate.type !== "file" || candidate.disabled) {
+          return -1;
+        }
+        let score = isVisible(candidate) ? 300 : 120;
+        const owner = candidate.closest?.(
+          ".filemanager, .filemanager-container, .filepicker, .fp-content-center, .fp-formset, .fp-repo-area"
+        );
+        if (owner) {
+          score += 500;
+        }
+        if (candidate.multiple) {
+          score += 20;
+        }
+        const attrs = [
+          candidate.id || "",
+          candidate.name || "",
+          candidate.className || "",
+          owner?.className || "",
+        ].join(" ").toLowerCase();
+        if (attrs.includes("filemanager")) {
+          score += 180;
+        }
+        if (attrs.includes("repo") || attrs.includes("upload")) {
+          score += 140;
+        }
+        if (attrs.includes("draft")) {
+          score += 40;
+        }
+        const dropzone = findVisibleMoodleDropzone();
+        if (dropzone && owner && owner.contains(dropzone)) {
+          score += 260;
+        }
+        if (owner?.querySelector?.(".dndupload-message")) {
+          score += 180;
+        }
+        return score;
+      };
+
       const clickSelectors = async (selectors) => {
         for (const doc of frameDocs()) {
           for (const selector of selectors) {
             const candidate = doc.querySelector(selector);
             if (candidate instanceof HTMLElement) {
               candidate.click();
-              await delay(250);
+              await delay(90);
             }
           }
         }
@@ -1603,12 +1668,12 @@ async function findUploadInputNodeId(targetContents, uploadKind) {
               }
               if (labels.some((entry) => label.includes(entry))) {
                 candidate.click();
-                await delay(450);
+                await delay(140);
                 return;
               }
             }
           }
-          await delay(250);
+          await delay(90);
         }
       };
 
@@ -1654,12 +1719,18 @@ async function findUploadInputNodeId(targetContents, uploadKind) {
         };
       };
 
-      const inputKinds = [
-        ...collectInputs(false),
-        ...collectInputs(true),
-      ];
+      const pickBestInput = () => {
+        const inputKinds = [
+          ...collectInputs(false),
+          ...collectInputs(true),
+        ];
+        return inputKinds
+          .map((candidate) => ({ candidate, score: scoreInput(candidate) }))
+          .filter((entry) => entry.score >= 0)
+          .sort((left, right) => right.score - left.score)[0]?.candidate || null;
+      };
 
-      let input = inputKinds.find((candidate) => isVisible(candidate)) || inputKinds[0] || null;
+      let input = pickBestInput();
       if (!input) {
         if (${JSON.stringify(uploadKind)} === "moodle") {
           await clickSelectors([
@@ -1692,11 +1763,7 @@ async function findUploadInputNodeId(targetContents, uploadKind) {
           ]);
         }
 
-        const refreshedInputs = [
-          ...collectInputs(false),
-          ...collectInputs(true),
-        ];
-        input = refreshedInputs.find((candidate) => isVisible(candidate)) || refreshedInputs[0] || null;
+        input = pickBestInput();
       }
 
       if (!input) {
@@ -1778,7 +1845,7 @@ async function findUploadInputNodeId(targetContents, uploadKind) {
 async function uploadFilesToTab(tabId, filePaths = [], tabUrl = "") {
   const targetContents = findWebContentsForTab(tabId);
   if (!targetContents) {
-    throw new Error("対象のタブが見つかりません。");
+    throw new Error("Target tab not found");
   }
 
   const resolvedPaths = filePaths
@@ -1792,7 +1859,7 @@ async function uploadFilesToTab(tabId, filePaths = [], tabUrl = "") {
     });
 
   if (!resolvedPaths.length) {
-    throw new Error("アップロードできるファイルがありません。");
+    throw new Error("No uploadable files");
   }
 
   const uploadKind = getUploadKindForUrl(tabUrl || targetContents.getURL?.() || "");
@@ -1810,16 +1877,21 @@ async function uploadFilesToTab(tabId, filePaths = [], tabUrl = "") {
       const diagnostics = uploadTarget.diagnostics
         ? ` kind=${uploadKind} url=${uploadTarget.diagnostics.url || "-"} visibleInputs=${uploadTarget.diagnostics.visibleInputCount ?? 0} hiddenInputs=${uploadTarget.diagnostics.hiddenInputCount ?? 0} frames=${uploadTarget.diagnostics.frameCount ?? 0} buttons=${uploadTarget.diagnostics.buttonCount ?? 0} labels=${(uploadTarget.diagnostics.buttonLabels || []).join(" / ")}`
         : ` kind=${uploadKind}`;
-      throw new Error(`このページでアップロード欄が見つかりません。${diagnostics}`);
+      throw new Error(`Upload input not found.${diagnostics}`);
     }
 
+    await targetContents.debugger.sendCommand("DOM.setFileInputFiles", {
+      nodeId: uploadTarget.nodeId,
+      files: [],
+    });
     await targetContents.debugger.sendCommand("DOM.setFileInputFiles", {
       nodeId: uploadTarget.nodeId,
       files: resolvedPaths,
     });
 
-    await targetContents.executeJavaScript(`
-      (() => {
+    const uploadResult = await targetContents.executeJavaScript(`
+      (async () => {
+        const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
         const walk = (root) => {
           if (!root) {
             return null;
@@ -1834,22 +1906,114 @@ async function uploadFilesToTab(tabId, filePaths = [], tabUrl = "") {
               return node;
             }
             if (node.shadowRoot) {
-              const shadowMatch = walk(node.shadowRoot);
-              if (shadowMatch) {
-                return shadowMatch;
+              const match = walk(node.shadowRoot);
+              if (match) {
+                return match;
               }
             }
           }
           return null;
         };
+        const isVisible = (element) => {
+          if (!(element instanceof HTMLElement)) {
+            return false;
+          }
+          const style = window.getComputedStyle(element);
+          if (style.display === "none" || style.visibility === "hidden" || style.opacity === "0" || element.hasAttribute("disabled")) {
+            return false;
+          }
+          const rect = element.getBoundingClientRect();
+          return rect.width > 0 && rect.height > 0;
+        };
+        const normalize = (value) => String(value || "").replace(/\s+/g, " ").trim().toLowerCase();
+        const clickMatching = (root, selectors, labels = []) => {
+          const candidates = [...root.querySelectorAll(selectors.join(", "))];
+          for (const candidate of candidates) {
+            if (!isVisible(candidate)) {
+              continue;
+            }
+            if (!labels.length) {
+              candidate.click();
+              return true;
+            }
+            const label = normalize(
+              candidate.getAttribute("aria-label") ||
+              candidate.getAttribute("title") ||
+              candidate.textContent ||
+              candidate.value
+            );
+            if (labels.some((entry) => label.includes(entry))) {
+              candidate.click();
+              return true;
+            }
+          }
+          return false;
+        };
+        const submitForm = (form) => {
+          if (!(form instanceof HTMLFormElement)) {
+            return false;
+          }
+          const submitControl = form.querySelector("button[type='submit'], input[type='submit']");
+          if (submitControl instanceof HTMLElement && isVisible(submitControl)) {
+            submitControl.click();
+            return true;
+          }
+          if (typeof form.requestSubmit === "function") {
+            form.requestSubmit();
+            return true;
+          }
+          form.submit();
+          return true;
+        };
+
         const input = walk(document);
         if (!input) {
-          return false;
+          return { finalized: false, submitted: false };
         }
+
         input.dispatchEvent(new Event("input", { bubbles: true }));
         input.dispatchEvent(new Event("change", { bubbles: true }));
+
+        let submitted = false;
+        if (${JSON.stringify(uploadKind)} === "moodle") {
+          const localRoot = input.closest(".moodle-dialogue, .filepicker, .filemanager, .fp-formset, form") || document;
+          const selectors = [
+            "button",
+            "input[type='submit']",
+            "a[role='button']",
+            ".fp-upload-btn",
+            ".fp-btn-add",
+          ];
+          const labels = [
+            "upload",
+            "save as",
+            "submit",
+            "continue",
+            "add",
+            "\u3053\u306e\u30d5\u30a1\u30a4\u30eb\u3092\u30a2\u30c3\u30d7\u30ed\u30fc\u30c9",
+            "\u30a2\u30c3\u30d7\u30ed\u30fc\u30c9",
+            "\u4fdd\u5b58\u3059\u308b",
+            "\u8ffd\u52a0\u3059\u308b",
+            "\u63d0\u51fa\u3092\u8ffd\u52a0",
+          ].map((label) => label.toLowerCase());
+
+          for (let attempt = 0; attempt < 12; attempt += 1) {
+            if (
+              clickMatching(localRoot, selectors, labels) ||
+              clickMatching(document, selectors, labels) ||
+              submitForm(input.closest("form")) ||
+              submitForm(localRoot.closest("form"))
+            ) {
+              submitted = true;
+              break;
+            }
+            await delay(80);
+          }
+        }
+
+        input.value = "";
         input.removeAttribute("data-fuzitter-upload-target");
-        return true;
+        return { finalized: true, submitted };
       })();
     `, true);
 
@@ -1857,6 +2021,7 @@ async function uploadFilesToTab(tabId, filePaths = [], tabUrl = "") {
       ok: true,
       count: resolvedPaths.length,
       uploadKind,
+      submitted: Boolean(uploadResult?.submitted),
     };
   } finally {
     try {
@@ -1873,6 +2038,7 @@ async function uploadFilesToTab(tabId, filePaths = [], tabUrl = "") {
                 node.type === "file" &&
                 node.getAttribute("data-fuzitter-upload-target") === "1"
               ) {
+                node.value = "";
                 node.removeAttribute("data-fuzitter-upload-target");
               }
               if (node.shadowRoot) {
@@ -1886,6 +2052,7 @@ async function uploadFilesToTab(tabId, filePaths = [], tabUrl = "") {
     } catch (_error) {
       // Ignore cleanup failures.
     }
+
     if (!debuggerWasAttached && targetContents.debugger.isAttached()) {
       targetContents.debugger.detach();
     }

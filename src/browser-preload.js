@@ -170,6 +170,32 @@ function handleLinkAuxClick(event) {
   });
 }
 
+function summarizeDropTarget(target) {
+  const element = target instanceof Element ? target.closest(".dndupload-message, .filemanager, .filemanager-container, .filepicker, form, body") : null;
+  if (!element) {
+    return { tag: "", classes: "", text: "" };
+  }
+  return {
+    tag: element.tagName.toLowerCase(),
+    classes: element.className || "",
+    text: String(element.textContent || "").replace(/\s+/g, " ").trim().slice(0, 120),
+  };
+}
+
+function emitDragDebug(phase, event) {
+  const dataTransfer = event.dataTransfer || null;
+  const types = dataTransfer?.types ? [...dataTransfer.types] : [];
+  const files = dataTransfer?.files ? Array.from(dataTransfer.files).map((file) => file.name) : [];
+  safeSendToHost("dnd-debug", {
+    phase,
+    url: location.href,
+    fileCount: files.length,
+    files,
+    types,
+    target: summarizeDropTarget(event.target),
+  });
+}
+
 const scheduleCourseContextUpdate = debounce(readCourseContext, 200);
 
 window.addEventListener("DOMContentLoaded", () => {
@@ -187,6 +213,15 @@ window.addEventListener("DOMContentLoaded", () => {
   }, true);
   document.addEventListener("contextmenu", handleLinkContextMenu, true);
   document.addEventListener("auxclick", handleLinkAuxClick, true);
+  document.addEventListener("dragenter", (event) => {
+    emitDragDebug("dragenter", event);
+  }, true);
+  document.addEventListener("dragover", (event) => {
+    emitDragDebug("dragover", event);
+  }, true);
+  document.addEventListener("drop", (event) => {
+    emitDragDebug("drop", event);
+  }, true);
 });
 
 window.addEventListener("load", readCourseContext);
