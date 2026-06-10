@@ -102,44 +102,6 @@ button {
   display: block;
 }
 
-.browser-upload-dropzone {
-  position: absolute;
-  inset: 18px;
-  z-index: 5;
-  display: none;
-  place-items: center;
-  gap: 8px;
-  border: 2px dashed #6f9ddd;
-  border-radius: 18px;
-  background: rgba(240, 247, 255, 0.94);
-  color: #20457a;
-  text-align: center;
-  pointer-events: none;
-}
-
-.browser-upload-dropzone.targeted {
-  inset: auto;
-  left: var(--dropzone-left, 18px);
-  top: var(--dropzone-top, 18px);
-  width: var(--dropzone-width, calc(100% - 36px));
-  height: var(--dropzone-height, calc(100% - 36px));
-}
-
-.browser-upload-dropzone.active {
-  display: grid;
-  pointer-events: auto;
-}
-
-.browser-upload-dropzone strong {
-  font-size: 22px;
-  font-weight: 700;
-}
-
-.browser-upload-dropzone span {
-  font-size: 14px;
-  color: #4a6488;
-}
-
 .browser-splitter {
   position: absolute;
   top: 0;
@@ -750,11 +712,6 @@ button {
 .file-row.selected {
   background: #e8f1ff;
   box-shadow: inset 0 0 0 1px #9dbcf4;
-}
-
-.file-row.drop-target {
-  background: #dff4e7;
-  box-shadow: inset 0 0 0 1px #6eb58a;
 }
 
 .file-row:last-child {

@@ -1342,12 +1342,19 @@ function listDirectory(targetPath) {
   };
 }
 
-const FALLBACK_DRAG_ICON = nativeImage.createFromDataURL(
-  "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAQAAAAAYLlVAAAA8ElEQVR4Ae3XsQ2DQBBF0Q+NQY4M4QLM4Bys4AnM4AjOwN1QHyvDOMkMt2rt7Nmzu13R5pTKty+O+kO5RAAAAAAAAAAAAICR9wMyoVo9hw3rroWAt4EvsC0BpvyEukgqS0bkkCm1cW0BpGbkADVYAKjwxKF1uHmIiiaTZGi4ZTSdKCbFf8gDuwZQhQAEjrISFRCGDpa2BkLomqKgJo0aoArkC5AOIDMDEwZ0AqSdzdrIW6DCQE4kYvNysGEKMluSleqrs9jwELyhlHLLJoPLD114F8nGMD4HzyBbs6k8ZZrguSu2Ce279b9Ec/WWavOXJeAAAAAAAAAAAAAACA74B/A9vywgq6Z9YAAAAASUVORK5CYII="
-);
+async function buildDragIcon(targetPath) {
+  try {
+    const icon = await app.getFileIcon(targetPath, { size: "normal" });
+    if (!icon.isEmpty()) {
+      return icon;
+    }
+  } catch (_error) {
+    // Fall back to a tiny generated icon when the shell icon is unavailable.
+  }
 
-function buildDragIcon() {
-  return FALLBACK_DRAG_ICON;
+  return nativeImage.createFromDataURL(
+    "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAQAAAAAYLlVAAAA8ElEQVR4Ae3XsQ2DQBBF0Q+NQY4M4QLM4Bys4AnM4AjOwN1QHyvDOMkMt2rt7Nmzu13R5pTKty+O+kO5RAAAAAAAAAAAAICR9wMyoVo9hw3rroWAt4EvsC0BpvyEukgqS0bkkCm1cW0BpGbkADVYAKjwxKF1uHmIiiaTZGi4ZTSdKCbFf8gDuwZQhQAEjrISFRCGDpa2BkLomqKgJo0aoArkC5AOIDMDEwZ0AqSdzdrIW6DCQE4kYvNysGEKMluSleqrs9jwELyhlHLLJoPLD114F8nGMD4HzyBbs6k8ZZrguSu2Ce279b9Ec/WWavOXJeAAAAAAAAAAAAAACA74B/A9vywgq6Z9YAAAAASUVORK5CYII="
+  );
 }
 
 function sendToRenderer(channel, payload) {
@@ -2011,7 +2018,6 @@ async function uploadFilesToTab(tabId, filePaths = [], tabUrl = "") {
           }
         }
 
-        input.value = "";
         input.removeAttribute("data-fuzitter-upload-target");
         return { finalized: true, submitted };
       })();
@@ -2038,7 +2044,6 @@ async function uploadFilesToTab(tabId, filePaths = [], tabUrl = "") {
                 node.type === "file" &&
                 node.getAttribute("data-fuzitter-upload-target") === "1"
               ) {
-                node.value = "";
                 node.removeAttribute("data-fuzitter-upload-target");
               }
               if (node.shadowRoot) {
@@ -2724,15 +2729,16 @@ ipcMain.handle("explorer:move", async (_event, payload) => {
   };
 });
 
-ipcMain.on("explorer:start-drag", (event, targetPath) => {
+ipcMain.on("explorer:start-drag", async (event, targetPath) => {
   const resolvedPath = path.resolve(targetPath || "");
   if (!fs.existsSync(resolvedPath)) {
     return;
   }
 
+  const icon = await buildDragIcon(resolvedPath);
   event.sender.startDrag({
     file: resolvedPath,
-    icon: buildDragIcon(),
+    icon,
   });
 });
 
