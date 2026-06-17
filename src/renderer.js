@@ -1544,32 +1544,35 @@ function formatFileSize(bytes) {
 
 function getExplorerFileIcon(entry) {
   if (entry.isDirectory) {
-    return { label: "📁", classNames: ["folder", "emoji"] };
+    return { label: "📁", glyph: "📁", classNames: ["folder", "emoji"], kind: "folder" };
   }
-
   const extension = String(entry.name || "").toLowerCase().split(".").at(-1) || "";
   if (extension === "pdf") {
-    return { label: "PDF", classNames: ["pdf"] };
+    return { label: "PDF", glyph: "P", classNames: ["document", "pdf"], kind: "pdf" };
   }
   if (["doc", "docx"].includes(extension)) {
-    return { label: "W", classNames: ["word"] };
+    return { label: "WORD", glyph: "W", classNames: ["document", "word"], kind: "word" };
   }
   if (["xls", "xlsx", "csv"].includes(extension)) {
-    return { label: "X", classNames: ["excel"] };
+    return { label: "EXCEL", glyph: "X", classNames: ["document", "excel"], kind: "excel" };
   }
   if (["ppt", "pptx"].includes(extension)) {
-    return { label: "P", classNames: ["powerpoint"] };
+    return { label: "PPT", glyph: "P", classNames: ["document", "powerpoint"], kind: "powerpoint" };
   }
-  if (["zip", "rar", "7z"].includes(extension)) {
-    return { label: "ZIP", classNames: ["archive"] };
+  if (["txt", "md", "rtf", "log", "js", "json", "html", "css", "py", "java", "c", "cpp", "ts", "tsx", "jsx"].includes(extension)) {
+    return { label: "TEXT", glyph: "T", classNames: ["document", "text"], kind: "text" };
   }
-  if (["jpg", "jpeg", "png", "gif", "webp", "svg"].includes(extension)) {
-    return { label: "IMG", classNames: ["image"] };
+  return { label: "FILE", glyph: "F", classNames: ["document", "file"], kind: "file" };
+}
+
+function buildExplorerIconMarkup(entry, icon) {
+  if (entry.isDirectory) {
+    return `<span class="file-icon-glyph">${escapeHtml(icon.glyph || "")}</span>`;
   }
-  if (["txt", "md"].includes(extension)) {
-    return { label: "TXT", classNames: ["text"] };
+  if (entry.iconDataUrl) {
+    return `<img class="file-icon-image" src="${entry.iconDataUrl}" alt="" />`;
   }
-  return { label: "FILE", classNames: ["file"] };
+  return `<span class="file-icon-glyph">${escapeHtml(icon.glyph || "")}</span><span class="file-icon-label">${escapeHtml(icon.label || "")}</span>`;
 }
 
 function splitPathSegments(targetPath) {
@@ -2845,10 +2848,10 @@ async function openExplorerEntrySmart(entry) {
   if (["pdf"].includes(ext)) {
     return openLocalFileInTab(entry.path, entry.name);
   }
-  if (["txt", "md", "js", "json", "html", "css", "py", "java", "c", "cpp"].includes(ext)) {
+  if (["txt", "md", "rtf", "log", "js", "json", "html", "css", "py", "java", "c", "cpp", "ts", "tsx", "jsx"].includes(ext)) {
     return openExplorerEntryWith(entry, "vscode");
   }
-  return openLocalFileInTab(entry.path, entry.name);
+  return openExplorerEntryWith(entry, "vscode");
 }
 
 function buildExplorerCreateMenu(parentPath) {
@@ -3293,7 +3296,7 @@ function renderDirectory(entries) {
     row.dataset.entryPath = entry.path;
     row.innerHTML = `
       <span class="file-name-cell">
-        <span class="file-icon">${entry.isDirectory ? "📁" : entry.name.toLowerCase().endsWith(".pdf") ? "📄" : "🗎"}</span>
+        <span class="file-icon">${buildExplorerIconMarkup(entry, icon)}</span>
         <span class="file-name-text" title="${escapeHtml(entry.name)}">${escapeHtml(entry.name)}</span>
       </span>
       <span class="file-meta-text">${formatTimestamp(entry.modifiedAt)}</span>
@@ -3302,8 +3305,11 @@ function renderDirectory(entries) {
 
     const iconEl = row.querySelector(".file-icon");
     if (iconEl) {
-      iconEl.textContent = icon.label;
+      iconEl.dataset.iconKind = icon.kind || "";
       iconEl.classList.add(...icon.classNames);
+      if (entry.iconDataUrl) {
+        iconEl.classList.add("native");
+      }
     }
 
     row.addEventListener("click", (event) => {

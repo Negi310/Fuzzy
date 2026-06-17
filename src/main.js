@@ -17,6 +17,10 @@ const ROOT_DIR_NAME = "Fuzitter";
 const BUILD_OUTPUT_DIR_NAME = "Fuzitter-win32-x64";
 const LEGACY_STORE_FILE_NAME = "fuzzy-store.json";
 const STORE_FILE_NAME = "fuzitter-store.json";
+app.commandLine.appendSwitch(
+  "disable-features",
+  "ThirdPartyStoragePartitioning,TopLevelTpcdOriginTrial,TpcdTrialSettings"
+);
 const ALLOWED_HOST_PATTERNS = [
   /^moodle(?:\d{4})?\.wakayama-u\.ac\.jp$/i,
   /^wakayama-u\.ac\.jp$/i,
@@ -1003,6 +1007,36 @@ function fileExists(targetPath) {
   return Boolean(targetPath && fs.existsSync(targetPath));
 }
 
+function isGoogleOrigin(target = "") {
+  try {
+    const parsed = new URL(target);
+    const hostname = parsed.hostname.toLowerCase();
+    return (
+      hostname === "google.com" ||
+      hostname.endsWith(".google.com") ||
+      hostname.endsWith(".googleusercontent.com") ||
+      hostname.endsWith(".gstatic.com") ||
+      hostname.endsWith(".googleapis.com")
+    );
+  } catch (_error) {
+    return false;
+  }
+}
+
+function shouldAllowStorageAccessPermission(permission, requestingOrigin = "", details = {}) {
+  if (!["storage-access", "top-level-storage-access"].includes(permission)) {
+    return false;
+  }
+
+  const relatedOrigins = [
+    requestingOrigin,
+    details?.requestingUrl || "",
+    details?.embeddingOrigin || "",
+  ];
+
+  return relatedOrigins.some((origin) => isGoogleOrigin(origin));
+}
+
 function findCommandOnPath(commandName) {
   if (!commandName) {
     return "";
@@ -1362,7 +1396,7 @@ function resolveMapping(courseName, courseUrl = "") {
   };
 }
 
-function listDirectory(targetPath) {
+async function listDirectory(targetPath) {
   const rootDir = getRootDir();
   ensureDirectory(rootDir);
   const requestedPath = path.resolve(targetPath || rootDir);
@@ -1372,10 +1406,11 @@ function listDirectory(targetPath) {
     : fs.existsSync(requestedPath) && fs.statSync(requestedPath).isDirectory()
     ? requestedPath
     : rootDir;
-  const entries = fs.readdirSync(safeTarget, { withFileTypes: true })
-    .map((entry) => {
+  const entries = (await Promise.all(fs.readdirSync(safeTarget, { withFileTypes: true })
+    .map(async (entry) => {
       const entryPath = path.join(safeTarget, entry.name);
       const stats = fs.statSync(entryPath);
+      const iconImage = await buildDragIcon(entryPath);
       return {
         name: entry.name,
         path: entryPath,
@@ -1383,8 +1418,9 @@ function listDirectory(targetPath) {
         withinRoot: isSubPath(rootDir, entryPath),
         modifiedAt: stats.mtime.toISOString(),
         size: entry.isDirectory() ? null : stats.size,
+        iconDataUrl: iconImage.toDataURL(),
       };
-    })
+    })))
     .sort((left, right) => Number(right.isDirectory) - Number(left.isDirectory) || left.name.localeCompare(right.name, "ja"));
 
   return {
@@ -1572,14 +1608,14 @@ function finalizeSavedFile(sourcePath, folderPath, requestedFileName = "", lesso
   return finalPath;
 }
 
-function buildInitialState() {
+async function buildInitialState() {
   const state = store.getState();
   ensureDirectory(getRootDir());
   return {
     rootDir: state.rootDir,
     mappings: state.mappings,
     downloadHistory: state.downloadHistory,
-    directory: listDirectory(state.rootDir || getRootDir()),
+    directory: await listDirectory(state.rootDir || getRootDir()),
   };
 }
 
@@ -2232,6 +2268,12 @@ app.whenReady().then(() => {
   migrateLegacyStateToFuzitter();
   store = new Store(getStoreFilePath());
   fuzzySession = session.fromPartition(FUZITTER_PARTITION);
+  fuzzySession.setPermissionCheckHandler((_webContents, permission, requestingOrigin, details) => (
+    shouldAllowStorageAccessPermission(permission, requestingOrigin, details)
+  ));
+  fuzzySession.setPermissionRequestHandler((_webContents, permission, callback, details) => {
+    callback(shouldAllowStorageAccessPermission(permission, details?.requestingOrigin || "", details));
+  });
   setupAutoUpdater();
 
   app.on("web-contents-created", (_appEvent, contents) => {
@@ -2538,7 +2580,7 @@ ipcMain.handle("app:update:install", () => {
   };
 });
 
-ipcMain.handle("state:get", () => buildInitialState());
+ipcMain.handle("state:get", async () => buildInitialState());
 
 ipcMain.handle("root:choose", async () => {
   const result = await dialog.showOpenDialog(mainWindow, {
@@ -2546,15 +2588,15 @@ ipcMain.handle("root:choose", async () => {
   });
 
   if (result.canceled || !result.filePaths[0]) {
-    return buildInitialState();
+    return await buildInitialState();
   }
 
   store.setRootDir(result.filePaths[0]);
   ensureDirectory(result.filePaths[0]);
-  return buildInitialState();
+  return await buildInitialState();
 });
 
-ipcMain.handle("directory:list", (_event, targetPath) => listDirectory(targetPath));
+ipcMain.handle("directory:list", async (_event, targetPath) => listDirectory(targetPath));
 
 ipcMain.handle("mapping:prepare", (_event, payload) => {
   const existing = store.findMapping({
