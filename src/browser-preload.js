@@ -170,29 +170,37 @@ function handleLinkAuxClick(event) {
   });
 }
 
-function summarizeDropTarget(target) {
-  const element = target instanceof Element ? target.closest(".dndupload-message, .filemanager, .filemanager-container, .filepicker, form, body") : null;
-  if (!element) {
-    return { tag: "", classes: "", text: "" };
-  }
-  return {
-    tag: element.tagName.toLowerCase(),
-    classes: element.className || "",
-    text: String(element.textContent || "").replace(/\s+/g, " ").trim().slice(0, 120),
-  };
+function isEditableElement(target) {
+  return target instanceof HTMLInputElement ||
+    target instanceof HTMLTextAreaElement ||
+    target?.isContentEditable;
 }
 
-function emitDragDebug(phase, event) {
-  const dataTransfer = event.dataTransfer || null;
-  const types = dataTransfer?.types ? [...dataTransfer.types] : [];
-  const files = dataTransfer?.files ? Array.from(dataTransfer.files).map((file) => file.name) : [];
-  safeSendToHost("dnd-debug", {
-    phase,
-    url: location.href,
-    fileCount: files.length,
-    files,
-    types,
-    target: summarizeDropTarget(event.target),
+function handleShortcutKeydown(event) {
+  safeSendToHost("shortcut-input", {
+    kind: "keyboard",
+    key: event.key,
+    ctrlKey: event.ctrlKey,
+    altKey: event.altKey,
+    shiftKey: event.shiftKey,
+    metaKey: event.metaKey,
+    repeat: event.repeat,
+    editable: isEditableElement(event.target),
+  });
+}
+
+function handleShortcutMouse(event) {
+  if (![1, 2, 3, 4].includes(event.button)) {
+    return;
+  }
+  safeSendToHost("shortcut-input", {
+    kind: "mouse",
+    button: event.button,
+    ctrlKey: event.ctrlKey,
+    altKey: event.altKey,
+    shiftKey: event.shiftKey,
+    metaKey: event.metaKey,
+    editable: isEditableElement(event.target),
   });
 }
 
@@ -211,17 +219,10 @@ window.addEventListener("DOMContentLoaded", () => {
   document.addEventListener("click", () => {
     setTimeout(readCourseContext, 80);
   }, true);
+  document.addEventListener("keydown", handleShortcutKeydown, true);
+  document.addEventListener("mousedown", handleShortcutMouse, true);
   document.addEventListener("contextmenu", handleLinkContextMenu, true);
   document.addEventListener("auxclick", handleLinkAuxClick, true);
-  document.addEventListener("dragenter", (event) => {
-    emitDragDebug("dragenter", event);
-  }, true);
-  document.addEventListener("dragover", (event) => {
-    emitDragDebug("dragover", event);
-  }, true);
-  document.addEventListener("drop", (event) => {
-    emitDragDebug("drop", event);
-  }, true);
 });
 
 window.addEventListener("load", readCourseContext);
