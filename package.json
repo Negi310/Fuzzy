@@ -1,6 +1,6 @@
 {
   "name": "fuzitter",
-  "version": "0.1.16",
+  "version": "0.1.17",
   "author": "Negi310",
   "description": "Moodle-integrated desktop workspace for local file organization",
   "main": "src/main.js",
