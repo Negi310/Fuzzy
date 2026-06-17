@@ -40,5 +40,6 @@ contextBridge.exposeInMainWorld("fuzzyApi", {
   onOpenRemotePdf: (handler) => ipcRenderer.on("pdf:open-remote", (_event, payload) => handler(payload)),
   onOpenRemoteFile: (handler) => ipcRenderer.on("file:open-remote", (_event, payload) => handler(payload)),
   onOpenPreviewFile: (handler) => ipcRenderer.on("file:open-preview", (_event, payload) => handler(payload)),
+  onShortcutInput: (handler) => ipcRenderer.on("shortcut-input", (_event, payload) => handler(payload)),
   onAppUpdateEvent: (handler) => ipcRenderer.on("app:update:event", (_event, payload) => handler(payload)),
 });

@@ -25,6 +25,20 @@ const FAVORITE_LINKS = [
   { label: "NotebookLM", url: "https://notebooklm.google.com", title: "NotebookLM", explorerLinked: false },
 ];
 
+const SHORTCUT_ACTIONS = [
+  { id: "back", label: "戻る" },
+  { id: "forward", label: "進む" },
+  { id: "reload", label: "再読み込み" },
+  { id: "favorite1", label: "お気に入りページ1" },
+  { id: "favorite2", label: "お気に入りページ2" },
+  { id: "favorite3", label: "お気に入りページ3" },
+  { id: "openExplorerPanel", label: "エクスプローラー開く" },
+  { id: "openTimelinePanel", label: "タイムライン開く" },
+  { id: "openRootFolder", label: "Fuzitterフォルダを開く" },
+  { id: "refreshPanel", label: "更新" },
+  { id: "openSettings", label: "設定" },
+];
+
 const state = {
   moodleHome: "https://moodle2026.wakayama-u.ac.jp/2026/",
   dashboardUrl: "https://moodle2026.wakayama-u.ac.jp/2026/my/",
@@ -68,6 +82,10 @@ const state = {
     currentVersion: "",
     message: "",
   },
+  keyBindings: {},
+  shortcutRecordingActionId: "",
+  lastShortcutSignature: "",
+  lastShortcutAt: 0,
   dialogFocusLock: false,
 };
 
@@ -90,6 +108,7 @@ const elements = {
   installUpdateButton: document.querySelector("#install-update-button"),
   fileList: document.querySelector("#file-list"),
   mappingList: document.querySelector("#mapping-list"),
+  shortcutList: document.querySelector("#shortcut-list"),
   timelineList: document.querySelector("#timeline-list"),
   sidePanel: document.querySelector("#side-panel"),
   workspaceMain: document.querySelector(".workspace-main"),
@@ -124,6 +143,8 @@ const elements = {
   contextMenu: document.querySelector("#context-menu"),
 };
 
+const SHORTCUT_ACTION_MAP = new Map(SHORTCUT_ACTIONS.map((action) => [action.id, action]));
+
 function createId(prefix) {
   return `${prefix}-${crypto.randomUUID()}`;
 }
@@ -143,6 +164,136 @@ function escapeHtml(value) {
     .replaceAll(">", "&gt;")
     .replaceAll('"', "&quot;")
     .replaceAll("'", "&#39;");
+}
+
+function normalizeKeyBindingMap(rawBindings = {}) {
+  const next = {};
+  for (const action of SHORTCUT_ACTIONS) {
+    const value = typeof rawBindings[action.id] === "string" ? rawBindings[action.id].trim() : "";
+    if (value) {
+      next[action.id] = value;
+    }
+  }
+  return next;
+}
+
+function formatKeyBinding(binding) {
+  return binding || "未設定";
+}
+
+function normalizeKeyToken(key) {
+  const raw = String(key || "").trim();
+  if (!raw) {
+    return "";
+  }
+  if (raw === " ") {
+    return "Space";
+  }
+  const alias = {
+    Escape: "Esc",
+    Esc: "Esc",
+    Control: "Ctrl",
+    Meta: "Meta",
+    ArrowUp: "ArrowUp",
+    ArrowDown: "ArrowDown",
+    ArrowLeft: "ArrowLeft",
+    ArrowRight: "ArrowRight",
+    PageUp: "PageUp",
+    PageDown: "PageDown",
+    "MediaTrackPrevious": "MediaPrev",
+    "MediaTrackNext": "MediaNext",
+    "MediaPlayPause": "MediaPlayPause",
+  };
+  if (alias[raw]) {
+    return alias[raw];
+  }
+  if (raw.length === 1) {
+    return raw.toUpperCase();
+  }
+  return raw;
+}
+
+function getMouseButtonToken(button) {
+  const mapping = {
+    1: "MouseMiddle",
+    2: "MouseRight",
+    3: "MouseBack",
+    4: "MouseForward",
+  };
+  return mapping[button] || "";
+}
+
+function buildShortcutDescriptor(input) {
+  if (!input || typeof input !== "object") {
+    return "";
+  }
+
+  const modifiers = [];
+  if (input.ctrlKey) {
+    modifiers.push("Ctrl");
+  }
+  if (input.altKey) {
+    modifiers.push("Alt");
+  }
+  if (input.shiftKey) {
+    modifiers.push("Shift");
+  }
+  if (input.metaKey) {
+    modifiers.push("Meta");
+  }
+
+  let primary = "";
+  if (input.kind === "mouse") {
+    primary = getMouseButtonToken(input.button);
+  } else {
+    primary = normalizeKeyToken(input.key);
+    if (["Ctrl", "Alt", "Shift", "Meta"].includes(primary)) {
+      primary = "";
+    }
+  }
+
+  if (!primary) {
+    return "";
+  }
+  return [...modifiers, primary].join("+");
+}
+
+function isEditableTarget(target) {
+  return target instanceof HTMLInputElement ||
+    target instanceof HTMLTextAreaElement ||
+    target?.isContentEditable;
+}
+
+function isRecordingShortcut() {
+  return Boolean(state.shortcutRecordingActionId);
+}
+
+async function persistKeyBindings() {
+  const preferences = await window.fuzzyApi.updatePreferences({
+    keyBindings: state.keyBindings,
+  });
+  state.keyBindings = normalizeKeyBindingMap(preferences.keyBindings);
+}
+
+function findShortcutActionByBinding(binding) {
+  if (!binding) {
+    return null;
+  }
+  return SHORTCUT_ACTIONS.find((action) => state.keyBindings[action.id] === binding) || null;
+}
+
+function shouldHandleShortcutInput(input, context = {}) {
+  const binding = buildShortcutDescriptor(input);
+  if (!binding) {
+    return false;
+  }
+  if (isRecordingShortcut()) {
+    return true;
+  }
+  if (context.editable) {
+    return false;
+  }
+  return Boolean(findShortcutActionByBinding(binding));
 }
 
 function normalizeUrl(input) {
@@ -190,6 +341,82 @@ function applyAutoUpdateStatus(payload = {}) {
     ...payload,
   };
   renderAutoUpdateStatus();
+}
+
+function stopShortcutRecording({ focus = false } = {}) {
+  const actionId = state.shortcutRecordingActionId;
+  state.shortcutRecordingActionId = "";
+  renderShortcutSettings();
+  if (focus && actionId) {
+    elements.shortcutList?.querySelector(`[data-shortcut-input="${actionId}"]`)?.focus();
+  }
+}
+
+function beginShortcutRecording(actionId) {
+  if (!SHORTCUT_ACTION_MAP.has(actionId)) {
+    return;
+  }
+  state.shortcutRecordingActionId = actionId;
+  renderShortcutSettings();
+  elements.shortcutList?.querySelector(`[data-shortcut-input="${actionId}"]`)?.focus();
+}
+
+async function assignShortcutBinding(actionId, binding) {
+  if (!SHORTCUT_ACTION_MAP.has(actionId)) {
+    return;
+  }
+
+  const nextBindings = normalizeKeyBindingMap(state.keyBindings);
+  for (const action of SHORTCUT_ACTIONS) {
+    if (nextBindings[action.id] === binding) {
+      delete nextBindings[action.id];
+    }
+  }
+  if (binding) {
+    nextBindings[actionId] = binding;
+  } else {
+    delete nextBindings[actionId];
+  }
+
+  state.keyBindings = nextBindings;
+  await persistKeyBindings();
+  stopShortcutRecording();
+}
+
+function renderShortcutSettings() {
+  if (!elements.shortcutList) {
+    return;
+  }
+
+  elements.shortcutList.innerHTML = "";
+  for (const action of SHORTCUT_ACTIONS) {
+    const row = document.createElement("div");
+    row.className = "shortcut-item";
+
+    const label = document.createElement("div");
+    label.className = "shortcut-label";
+    label.textContent = action.label;
+
+    const input = document.createElement("input");
+    input.type = "text";
+    input.readOnly = true;
+    input.className = "dialog-input shortcut-input";
+    input.dataset.shortcutInput = action.id;
+    input.value = state.shortcutRecordingActionId === action.id
+      ? "入力待ち..."
+      : formatKeyBinding(state.keyBindings[action.id] || "");
+    input.classList.toggle("is-recording", state.shortcutRecordingActionId === action.id);
+    input.setAttribute("aria-label", `${action.label} のショートカット`);
+
+    const clearButton = document.createElement("button");
+    clearButton.type = "button";
+    clearButton.className = "ghost-button";
+    clearButton.dataset.shortcutClear = action.id;
+    clearButton.textContent = "クリア";
+
+    row.append(label, input, clearButton);
+    elements.shortcutList.appendChild(row);
+  }
 }
 
 function sanitizeFolderName(name) {
@@ -1535,6 +1762,117 @@ function setPanelTab(tabName) {
   }
 }
 
+function openFavoriteLink(index) {
+  const entry = FAVORITE_LINKS[index];
+  if (!entry) {
+    return false;
+  }
+  const url = typeof entry.url === "function" ? entry.url() : entry.url;
+  createBrowserTab(url, entry.title, { explorerLinked: entry.explorerLinked });
+  return true;
+}
+
+async function refreshActivePanel() {
+  if (state.activePanelTab === "timeline") {
+    ensureDashboardLoaded();
+    scheduleDashboardRefresh();
+    return true;
+  }
+  await loadDirectory(state.currentDir || state.rootDir, { syncBrowserFromDirectory: false });
+  return true;
+}
+
+async function openRootFolderAction() {
+  if (!state.rootDir) {
+    toast("ルートフォルダがまだ設定されていません", "warn");
+    return false;
+  }
+  await loadDirectory(state.rootDir, { syncBrowserFromDirectory: false });
+  return true;
+}
+
+async function executeShortcutAction(actionId) {
+  const currentTab = getActiveTab();
+  switch (actionId) {
+    case "back":
+      if (currentTab?.webviewEl?.canGoBack()) {
+        currentTab.webviewEl.goBack();
+        return true;
+      }
+      return false;
+    case "forward":
+      if (currentTab?.webviewEl?.canGoForward()) {
+        currentTab.webviewEl.goForward();
+        return true;
+      }
+      return false;
+    case "reload":
+      if (currentTab?.webviewEl) {
+        currentTab.webviewEl.reload();
+        return true;
+      }
+      return false;
+    case "favorite1":
+      return openFavoriteLink(0);
+    case "favorite2":
+      return openFavoriteLink(1);
+    case "favorite3":
+      return openFavoriteLink(2);
+    case "openExplorerPanel":
+      setPanelTab("explorer");
+      return true;
+    case "openTimelinePanel":
+      setPanelTab("timeline");
+      return true;
+    case "openRootFolder":
+      return await openRootFolderAction();
+    case "refreshPanel":
+      return await refreshActivePanel();
+    case "openSettings":
+      if (!elements.settingsDialog.open) {
+        elements.settingsDialog.showModal();
+      }
+      return true;
+    default:
+      return false;
+  }
+}
+
+async function handleShortcutInput(input, context = {}) {
+  const binding = buildShortcutDescriptor(input);
+  if (!binding) {
+    return false;
+  }
+
+  if (isRecordingShortcut()) {
+    await assignShortcutBinding(state.shortcutRecordingActionId, binding);
+    return true;
+  }
+
+  if (context.editable) {
+    return false;
+  }
+
+  const action = findShortcutActionByBinding(binding);
+  if (!action) {
+    return false;
+  }
+
+  if (input.kind === "keyboard" && input.repeat) {
+    return true;
+  }
+
+  const now = Date.now();
+  const signature = `${action.id}:${binding}`;
+  if (state.lastShortcutSignature === signature && now - state.lastShortcutAt < 120) {
+    return true;
+  }
+  state.lastShortcutSignature = signature;
+  state.lastShortcutAt = now;
+
+  return await executeShortcutAction(action.id);
+}
+
 function syncAddressBar() {
   const activeTab = getActiveTab();
   elements.addressInput.value = activeTab?.url || activeTab?.path || "";
@@ -2309,6 +2647,10 @@ function mountBrowserLikeTab(tab, usePreload = true) {
       return;
     }
 
+    if (event.channel === "shortcut-input") {
+      void handleShortcutInput(payload, { editable: Boolean(payload.editable) });
+      return;
+    }
     if (event.channel !== "page-context") {
       return;
     }
@@ -3292,6 +3634,17 @@ function absorbWheelEvent(event) {
   event.stopPropagation();
 }
 
+function bindDialogBackdropClose(dialog) {
+  if (!dialog) {
+    return;
+  }
+  dialog.addEventListener("click", (event) => {
+    if (event.target === dialog) {
+      dialog.close();
+    }
+  });
+}
+
 function wireEvents() {
   elements.browserSplitter.addEventListener("pointerdown", (event) => {
     event.preventDefault();
@@ -3378,9 +3731,27 @@ function wireEvents() {
   });
   window.addEventListener("blur", hideContextMenu);
   window.addEventListener("keydown", (event) => {
+    if (isRecordingShortcut()) {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        stopShortcutRecording({ focus: true });
+        return;
+      }
+      event.preventDefault();
+      void handleShortcutInput({
+        kind: "keyboard",
+        key: event.key,
+        ctrlKey: event.ctrlKey,
+        altKey: event.altKey,
+        shiftKey: event.shiftKey,
+        metaKey: event.metaKey,
+        repeat: event.repeat,
+      });
+      return;
+    }
     if ((event.ctrlKey || event.metaKey) && !event.shiftKey && event.key.toLowerCase() === "x") {
       const active = document.activeElement;
-      const typing = active instanceof HTMLInputElement || active instanceof HTMLTextAreaElement || active?.isContentEditable;
+      const typing = isEditableTarget(active);
       if (!typing && cutSelectedExplorerEntries()) {
         event.preventDefault();
         return;
@@ -3388,7 +3759,7 @@ function wireEvents() {
     }
     if ((event.ctrlKey || event.metaKey) && !event.shiftKey && event.key.toLowerCase() === "v") {
       const active = document.activeElement;
-      const typing = active instanceof HTMLInputElement || active instanceof HTMLTextAreaElement || active?.isContentEditable;
+      const typing = isEditableTarget(active);
       if (!typing && state.cutExplorerPaths.length) {
         event.preventDefault();
         void pasteCutExplorerEntries();
@@ -3398,6 +3769,45 @@ function wireEvents() {
     if (event.key === "Escape") {
       hideContextMenu();
     }
+    const shortcutInput = {
+      kind: "keyboard",
+      key: event.key,
+      ctrlKey: event.ctrlKey,
+      altKey: event.altKey,
+      shiftKey: event.shiftKey,
+      metaKey: event.metaKey,
+      repeat: event.repeat,
+    };
+    const editable = isEditableTarget(document.activeElement);
+    if (shouldHandleShortcutInput(shortcutInput, { editable })) {
+      event.preventDefault();
+      event.stopPropagation();
+      void handleShortcutInput(shortcutInput, { editable });
+    }
+  });
+  window.addEventListener("mousedown", (event) => {
+    if (event.button === 0) {
+      return;
+    }
+    const editable = isEditableTarget(document.activeElement);
+    const shortcutInput = {
+      kind: "mouse",
+      button: event.button,
+      ctrlKey: event.ctrlKey,
+      altKey: event.altKey,
+      shiftKey: event.shiftKey,
+      metaKey: event.metaKey,
+    };
+    if (isRecordingShortcut()) {
+      event.preventDefault();
+      void handleShortcutInput(shortcutInput);
+      return;
+    }
+    if (shouldHandleShortcutInput(shortcutInput, { editable })) {
+      event.preventDefault();
+      event.stopPropagation();
+      void handleShortcutInput(shortcutInput, { editable });
+    }
   });
 
   document.querySelector(".browser-toolbar").addEventListener("click", (event) => {
@@ -3406,31 +3816,16 @@ function wireEvents() {
       return;
     }
 
-    const currentTab = getActiveTab();
     const action = target.dataset.action;
-    if (!currentTab?.webviewEl) {
-      return;
-    }
-
-    if (action === "back" && currentTab.webviewEl.canGoBack()) {
-      currentTab.webviewEl.goBack();
-      return;
-    }
-    if (action === "forward" && currentTab.webviewEl.canGoForward()) {
-      currentTab.webviewEl.goForward();
-      return;
-    }
-    if (action === "reload") {
-      currentTab.webviewEl.reload();
-      return;
-    }
     if (action === "favorite") {
       toast("お気に入り機能はまだ未実装です", "info");
       return;
     }
     if (action === "menu") {
-      elements.settingsDialog.showModal();
+      void executeShortcutAction("openSettings");
+      return;
     }
+    void executeShortcutAction(action);
   });
 
   document.querySelector('[data-action="favorite"]')?.addEventListener("click", (event) => {
@@ -3514,12 +3909,7 @@ function wireEvents() {
   });
 
   document.querySelector("#panel-refresh-button").addEventListener("click", async () => {
-    if (state.activePanelTab === "timeline") {
-      ensureDashboardLoaded();
-      scheduleDashboardRefresh();
-      return;
-    }
-    await loadDirectory(state.currentDir || state.rootDir, { syncBrowserFromDirectory: false });
+    await executeShortcutAction("refreshPanel");
   });
 
   async function chooseRootDirectory() {
@@ -3541,11 +3931,11 @@ function wireEvents() {
       toast("保存ルートがまだ設定されていません", "warn");
       return;
     }
-    await loadDirectory(state.rootDir, { syncBrowserFromDirectory: false });
+    await executeShortcutAction("openRootFolder");
   });
 
   elements.openSettingsButton?.addEventListener("click", () => {
-    elements.settingsDialog.showModal();
+    void executeShortcutAction("openSettings");
   });
 
   elements.saveMoodleHomeButton?.addEventListener("click", async () => {
@@ -3644,9 +4034,36 @@ function wireEvents() {
     }
     state.pendingMappingCourse = null;
   });
+  elements.settingsDialog.addEventListener("close", () => {
+    stopShortcutRecording();
+  });
+  bindDialogBackdropClose(elements.settingsDialog);
+  bindDialogBackdropClose(elements.mappingDialog);
 
-  elements.explorerTabButton.addEventListener("click", () => setPanelTab("explorer"));
-  elements.timelineTabButton.addEventListener("click", () => setPanelTab("timeline"));
+  elements.shortcutList?.addEventListener("click", (event) => {
+    const input = event.target.closest("[data-shortcut-input]");
+    if (input) {
+      beginShortcutRecording(input.dataset.shortcutInput);
+      return;
+    }
+    const clear = event.target.closest("[data-shortcut-clear]");
+    if (clear) {
+      void assignShortcutBinding(clear.dataset.shortcutClear, "");
+    }
+  });
+  elements.shortcutList?.addEventListener("focusin", (event) => {
+    const input = event.target.closest("[data-shortcut-input]");
+    if (input) {
+      beginShortcutRecording(input.dataset.shortcutInput);
+    }
+  });
+
+  elements.explorerTabButton.addEventListener("click", () => {
+    void executeShortcutAction("openExplorerPanel");
+  });
+  elements.timelineTabButton.addEventListener("click", () => {
+    void executeShortcutAction("openTimelinePanel");
+  });
   elements.dockToggleButton.addEventListener("click", () => {
     state.panelVisible = !state.panelVisible;
     renderSidePanelVisibility();
@@ -3814,6 +4231,7 @@ async function initialize() {
   const defaults = await window.fuzzyApi.getDefaults();
   setMoodleHome(defaults.moodleHome);
   state.dashboardAutoload = Boolean(defaults.dashboardAutoload);
+  state.keyBindings = normalizeKeyBindingMap(defaults.keyBindings);
   applyAutoUpdateStatus({
     currentVersion: defaults.appVersion || "",
     ...(defaults.autoUpdate || {}),
@@ -3829,6 +4247,7 @@ async function initialize() {
 
   renderDirectory(initial.directory.entries);
   renderMappings();
+  renderShortcutSettings();
   renderSidePanelVisibility();
   renderPanelTabs();
   renderSubmissionFolderButton();
@@ -3890,6 +4309,11 @@ window.fuzzyApi.onOpenPreviewFile((payload) => {
   openLocalFileInTab(payload.localPath, payload.fileName || "download", {
     cleanupOnClose: Boolean(payload.cleanupOnClose),
   });
+});
+
+window.fuzzyApi.onShortcutInput((payload) => {
+  const editable = isEditableTarget(document.activeElement);
+  void handleShortcutInput(payload, { editable });
 });
 
 window.fuzzyApi.onDownloadPrompt(async (payload) => {

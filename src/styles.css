@@ -1070,7 +1070,8 @@ button {
 }
 
 .mapping-list,
-.suggestions {
+.suggestions,
+.shortcut-list {
   display: grid;
   gap: 8px;
 }
@@ -1088,6 +1089,33 @@ button {
 .suggestion-item {
   text-align: left;
   cursor: pointer;
+}
+
+.shortcut-item {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(160px, 220px) auto;
+  gap: 10px;
+  align-items: center;
+  padding: 12px;
+  border: 1px solid #e1e9f2;
+  border-radius: 8px;
+  background: #ffffff;
+}
+
+.shortcut-label {
+  font-size: 14px;
+  font-weight: 600;
+  color: #2a3a4f;
+}
+
+.shortcut-input {
+  width: 100%;
+}
+
+.shortcut-input.is-recording {
+  border-color: #2163d8;
+  box-shadow: 0 0 0 3px rgba(33, 99, 216, 0.12);
+  background: #f7fbff;
 }
 
 .dialog-actions {

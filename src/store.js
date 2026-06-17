@@ -59,6 +59,7 @@ class Store {
         downloadHistory: [],
         preferences: {
           dashboardAutoload: false,
+          keyBindings: {},
         },
       };
     }
@@ -72,7 +73,11 @@ class Store {
   getState() {
     this.state.preferences ??= {
       dashboardAutoload: false,
+      keyBindings: {},
     };
+    if (!this.state.preferences.keyBindings || typeof this.state.preferences.keyBindings !== "object") {
+      this.state.preferences.keyBindings = {};
+    }
     this.state.mappings = this.state.mappings.map((entry) => ({
       ...entry,
       courseId: entry.courseId || extractCourseIdFromUrl(entry.courseUrl),

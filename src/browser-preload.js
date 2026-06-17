@@ -170,6 +170,39 @@ function handleLinkAuxClick(event) {
   });
 }
 
+function isEditableElement(target) {
+  return target instanceof HTMLInputElement ||
+    target instanceof HTMLTextAreaElement ||
+    target?.isContentEditable;
+}
+
+function handleShortcutKeydown(event) {
+  safeSendToHost("shortcut-input", {
+    kind: "keyboard",
+    key: event.key,
+    ctrlKey: event.ctrlKey,
+    altKey: event.altKey,
+    shiftKey: event.shiftKey,
+    metaKey: event.metaKey,
+    repeat: event.repeat,
+    editable: isEditableElement(event.target),
+  });
+}
+
+function handleShortcutMouse(event) {
+  if (![1, 2, 3, 4].includes(event.button)) {
+    return;
+  }
+  safeSendToHost("shortcut-input", {
+    kind: "mouse",
+    button: event.button,
+    ctrlKey: event.ctrlKey,
+    altKey: event.altKey,
+    shiftKey: event.shiftKey,
+    metaKey: event.metaKey,
+    editable: isEditableElement(event.target),
+  });
+}
 const scheduleCourseContextUpdate = debounce(readCourseContext, 200);
 
 window.addEventListener("DOMContentLoaded", () => {
@@ -185,6 +218,8 @@ window.addEventListener("DOMContentLoaded", () => {
   document.addEventListener("click", () => {
     setTimeout(readCourseContext, 80);
   }, true);
+  document.addEventListener("keydown", handleShortcutKeydown, true);
+  document.addEventListener("mousedown", handleShortcutMouse, true);
   document.addEventListener("contextmenu", handleLinkContextMenu, true);
   document.addEventListener("auxclick", handleLinkAuxClick, true);
 });

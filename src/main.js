@@ -24,6 +24,9 @@ const ALLOWED_HOST_PATTERNS = [
   /^gemini\.google\.com$/i,
   /^notebooklm\.google\.com$/i,
   /^accounts\.google\.com$/i,
+  /^([a-z0-9-]+\.)*google\.com$/i,
+  /^([a-z0-9-]+\.)*gstatic\.com$/i,
+  /^([a-z0-9-]+\.)*googleusercontent\.com$/i,
   /^login\.microsoftonline\.com$/i,
   /^sts\.windows\.net$/i,
   /^aadcdn\.msauth\.net$/i,
@@ -35,6 +38,7 @@ let mainWindow = null;
 let store = null;
 let fuzzySession = null;
 let isQuittingAfterSessionFlush = false;
+const shortcutForwardedContents = new Set();
 const tabRegistry = new Map();
 const webContentsToTab = new Map();
 const customDownloadQueues = new Map();
@@ -433,6 +437,19 @@ function isAllowedUrl(targetUrl) {
       return false;
     }
     return ALLOWED_HOST_PATTERNS.some((pattern) => pattern.test(parsed.hostname));
+  } catch (_error) {
+    return false;
+  }
+}
+
+function isGoogleWorkspaceUrl(targetUrl) {
+  try {
+    const parsed = new URL(targetUrl);
+    return (
+      /^([a-z0-9-]+\.)*google\.com$/i.test(parsed.hostname) ||
+      /^([a-z0-9-]+\.)*gstatic\.com$/i.test(parsed.hostname) ||
+      /^([a-z0-9-]+\.)*googleusercontent\.com$/i.test(parsed.hostname)
+    );
   } catch (_error) {
     return false;
   }
@@ -1087,13 +1104,37 @@ function resolveProgramPath(programKey) {
   );
 }
 
-function launchProgram(programPath, args) {
+function launchProgram(programPath, args, options = {}) {
   const child = spawn(programPath, args, {
     detached: true,
     stdio: "ignore",
-    windowsHide: true,
+    windowsHide: Boolean(options.windowsHide),
   });
   child.unref();
+}
+
+async function openPathWithDefaultApp(targetPath) {
+  const result = await shell.openPath(targetPath);
+  if (result) {
+    throw new Error(result);
+  }
+  return { ok: true, programPath: "default" };
+}
+
+function cleanupHeadlessPowerPointInstances() {
+  const script = `
+$ErrorActionPreference = 'SilentlyContinue'
+Get-Process POWERPNT | Where-Object { [string]::IsNullOrWhiteSpace($_.MainWindowTitle) } | Stop-Process -Force
+`;
+  try {
+    execFileSync("powershell", ["-NoProfile", "-NonInteractive", "-Command", script], {
+      encoding: "utf8",
+      stdio: "pipe",
+      windowsHide: true,
+    });
+  } catch (_error) {
+    // Ignore cleanup failures and continue with launch.
+  }
 }
 
 function createOfficeDocumentWithPowerShell(targetPath, officeType) {
@@ -1141,6 +1182,10 @@ try {
 } finally {
   if ($presentation) { $presentation.Close() }
   if ($powerpoint) { $powerpoint.Quit() }
+  if ($presentation) { [void][System.Runtime.InteropServices.Marshal]::FinalReleaseComObject($presentation) }
+  if ($powerpoint) { [void][System.Runtime.InteropServices.Marshal]::FinalReleaseComObject($powerpoint) }
+  [GC]::Collect()
+  [GC]::WaitForPendingFinalizers()
 }
 `,
   };
@@ -1195,10 +1240,17 @@ function createExplorerEntry(parentPath, entryKind) {
   return { path: targetPath, name: path.basename(targetPath), kind };
 }
 
-function openExplorerEntryWithProgram(targetPath, programKey) {
+async function openExplorerEntryWithProgram(targetPath, programKey) {
   const resolvedTargetPath = resolveLocalBuildMirrorPath(targetPath);
   if (!resolvedTargetPath || !isAllowedExplorerTargetPath(resolvedTargetPath) || !fs.existsSync(resolvedTargetPath)) {
     throw new Error("Target file is not available.");
+  }
+
+  if (["word", "excel", "powerpoint"].includes(programKey)) {
+    if (programKey === "powerpoint") {
+      cleanupHeadlessPowerPointInstances();
+    }
+    return await openPathWithDefaultApp(resolvedTargetPath);
   }
 
   const programPath = resolveProgramPath(programKey);
@@ -1367,6 +1419,64 @@ function sendToRenderer(channel, payload) {
   }
 }
 
+function buildShortcutInputFromElectron(input) {
+  if (!input || input.type !== "keyDown") {
+    return null;
+  }
+
+  return {
+    kind: "keyboard",
+    key: input.key || input.code || "",
+    ctrlKey: Boolean(input.control),
+    altKey: Boolean(input.alt),
+    shiftKey: Boolean(input.shift),
+    metaKey: Boolean(input.meta),
+    repeat: Boolean(input.isAutoRepeat),
+    source: "main",
+  };
+}
+
+function forwardShortcutInput(payload) {
+  if (payload) {
+    sendToRenderer("shortcut-input", payload);
+  }
+}
+
+function attachShortcutForwarding(targetContents) {
+  if (!targetContents || targetContents.isDestroyed() || shortcutForwardedContents.has(targetContents.id)) {
+    return;
+  }
+
+  shortcutForwardedContents.add(targetContents.id);
+  targetContents.on("before-input-event", (_event, input) => {
+    forwardShortcutInput(buildShortcutInputFromElectron(input));
+  });
+  targetContents.once("destroyed", () => {
+    shortcutForwardedContents.delete(targetContents.id);
+  });
+}
+
+function forwardAppCommandAsShortcut(command) {
+  const mapping = {
+    "browser-back": 3,
+    "browser-backward": 3,
+    "browser-forward": 4,
+  };
+  const button = mapping[command];
+  if (!button) {
+    return;
+  }
+  forwardShortcutInput({
+    kind: "mouse",
+    button,
+    ctrlKey: false,
+    altKey: false,
+    shiftKey: false,
+    metaKey: false,
+    source: "main",
+  });
+}
+
 function sendBlockedNavigationMessage(message) {
   sendToRenderer("download:event", {
     type: "blocked",
@@ -1411,6 +1521,34 @@ function emitPreviewFileOpen(sourceContentsId, localPath, fileName = "") {
     courseName: context.courseName || "",
     cleanupOnClose: true,
   });
+}
+
+function resolveOfficePreviewProgram(targetPath, fileName = "") {
+  const extension = path.extname(fileName || targetPath || "").toLowerCase();
+  if ([".doc", ".docx"].includes(extension)) {
+    return "word";
+  }
+  if ([".xls", ".xlsx"].includes(extension)) {
+    return "excel";
+  }
+  if ([".ppt", ".pptx"].includes(extension)) {
+    return "powerpoint";
+  }
+  return "";
+}
+
+function openPreviewTarget(sourceContentsId, localPath, fileName = "") {
+  const officeProgram = resolveOfficePreviewProgram(localPath, fileName);
+  if (officeProgram) {
+    openExplorerEntryWithProgram(localPath, officeProgram)
+      .catch(() => {
+      // Fall back to the in-app preview tab when external launch fails.
+        emitPreviewFileOpen(sourceContentsId, localPath, fileName);
+      });
+    return;
+  }
+
+  emitPreviewFileOpen(sourceContentsId, localPath, fileName);
 }
 
 function buildPreviewPath(fileName) {
@@ -1477,6 +1615,11 @@ function createWindow() {
 
   mainWindow.setMenuBarVisibility(false);
   mainWindow.removeMenu();
+  attachShortcutForwarding(mainWindow.webContents);
+  mainWindow.on("app-command", (event, command) => {
+    event.preventDefault();
+    forwardAppCommandAsShortcut(command);
+  });
   mainWindow.loadFile(path.join(__dirname, "index.html"));
   mainWindow.webContents.once("did-finish-load", () => {
     emitAutoUpdateEvent({
@@ -2174,6 +2317,11 @@ app.whenReady().then(() => {
         return { action: "deny" };
       }
 
+      if (isAllowedUrl(url) && isGoogleWorkspaceUrl(contents.getURL()) && isGoogleWorkspaceUrl(url)) {
+        contents.loadURL(url);
+        return { action: "deny" };
+      }
+
       if (isAllowedUrl(url)) {
         sendToRenderer("course:open-tab", {
           courseUrl: url,
@@ -2208,7 +2356,7 @@ app.whenReady().then(() => {
               fileName: path.basename(finalPath),
             });
             if (!customRequest.suppressOpen) {
-              emitPreviewFileOpen(contents.id, finalPath, path.basename(finalPath));
+              openPreviewTarget(contents.id, finalPath, path.basename(finalPath));
             }
             return;
           }
@@ -2237,7 +2385,7 @@ app.whenReady().then(() => {
         item.setSavePath(autoPreviewPath);
         item.once("done", (_doneEvent, state) => {
           if (state === "completed") {
-            emitPreviewFileOpen(contents.id, autoPreviewPath, path.basename(autoPreviewPath));
+            openPreviewTarget(contents.id, autoPreviewPath, path.basename(autoPreviewPath));
             return;
           }
           sendToRenderer("download:event", {
@@ -2342,6 +2490,9 @@ app.on("before-quit", (event) => {
 ipcMain.handle("app:defaults", () => ({
   moodleHome: normalizeMoodleHomeUrl(store.getState().preferences?.moodleHome || WAKAYAMA_MOODLE_HOME),
   dashboardAutoload: Boolean(store.getState().preferences?.dashboardAutoload),
+  keyBindings: store.getState().preferences?.keyBindings && typeof store.getState().preferences.keyBindings === "object"
+    ? { ...store.getState().preferences.keyBindings }
+    : {},
   appVersion: app.getVersion(),
   autoUpdate: getAutoUpdateStatus(),
 }));
@@ -2353,9 +2504,15 @@ ipcMain.handle("app:preferences:update", (_event, payload) => {
   if (typeof payload.moodleHome === "string") {
     store.setPreference("moodleHome", normalizeMoodleHomeUrl(payload.moodleHome));
   }
+  if (payload.keyBindings && typeof payload.keyBindings === "object" && !Array.isArray(payload.keyBindings)) {
+    store.setPreference("keyBindings", { ...payload.keyBindings });
+  }
   return {
     moodleHome: normalizeMoodleHomeUrl(store.getState().preferences?.moodleHome || WAKAYAMA_MOODLE_HOME),
     dashboardAutoload: Boolean(store.getState().preferences?.dashboardAutoload),
+    keyBindings: store.getState().preferences?.keyBindings && typeof store.getState().preferences.keyBindings === "object"
+      ? { ...store.getState().preferences.keyBindings }
+      : {},
     appVersion: app.getVersion(),
     autoUpdate: getAutoUpdateStatus(),
   };
@@ -2794,6 +2951,7 @@ ipcMain.handle("preview:cleanup", async (_event, targetPath) => {
 
 ipcMain.on("webview:register", (_event, payload) => {
   webContentsToTab.set(payload.webContentsId, payload.tabId);
+  attachShortcutForwarding(webContents.fromId(payload.webContentsId));
 });
 
 ipcMain.on("webview:unregister", (_event, payload) => {
