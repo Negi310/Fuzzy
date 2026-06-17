@@ -203,7 +203,6 @@ function handleShortcutMouse(event) {
     editable: isEditableElement(event.target),
   });
 }
-
 const scheduleCourseContextUpdate = debounce(readCourseContext, 200);
 
 window.addEventListener("DOMContentLoaded", () => {

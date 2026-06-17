@@ -2651,7 +2651,6 @@ function mountBrowserLikeTab(tab, usePreload = true) {
       void handleShortcutInput(payload, { editable: Boolean(payload.editable) });
       return;
     }
-
     if (event.channel !== "page-context") {
       return;
     }
@@ -3633,17 +3632,6 @@ function setupDashboardWebview() {
 
 function absorbWheelEvent(event) {
   event.stopPropagation();
-}
-
-function bindDialogBackdropClose(dialog) {
-  if (!dialog) {
-    return;
-  }
-  dialog.addEventListener("click", (event) => {
-    if (event.target === dialog) {
-      dialog.close();
-    }
-  });
 }
 
 function bindDialogBackdropClose(dialog) {
