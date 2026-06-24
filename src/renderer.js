@@ -69,6 +69,9 @@ const state = {
   explorerSelectionAnchorPath: "",
   draggedExplorerPaths: [],
   cutExplorerPaths: [],
+  copiedExplorerPaths: [],
+  explorerClipboardMode: "",
+  explorerUndoStack: [],
   downloadDraft: null,
   renameDraft: null,
   contextMenu: null,
@@ -264,6 +267,10 @@ function isEditableTarget(target) {
     target?.isContentEditable;
 }
 
+function isEmbeddedBrowserFocused() {
+  return document.activeElement?.tagName === "WEBVIEW";
+}
+
 function isRecordingShortcut() {
   return Boolean(state.shortcutRecordingActionId);
 }
@@ -312,6 +319,31 @@ function setMoodleHome(nextUrl) {
   state.dashboardUrl = new URL("./my/", nextUrl).toString();
   if (elements.moodleHomeInput) {
     elements.moodleHomeInput.value = nextUrl;
+  }
+}
+
+function shouldOpenInExternalBrowser(url) {
+  try {
+    const parsed = new URL(normalizeUrl(url));
+    const hostname = parsed.hostname.toLowerCase();
+    return ![
+      /^moodle(?:\d{4})?\.wakayama-u\.ac\.jp$/i,
+      /^wakayama-u\.ac\.jp$/i,
+      /^www\.wakayama-u\.ac\.jp$/i,
+      /^gemini\.google\.com$/i,
+      /^notebooklm\.google\.com$/i,
+      /^accounts\.google\.com$/i,
+      /^([a-z0-9-]+\.)*google\.com$/i,
+      /^([a-z0-9-]+\.)*gstatic\.com$/i,
+      /^([a-z0-9-]+\.)*googleusercontent\.com$/i,
+      /^login\.microsoftonline\.com$/i,
+      /^sts\.windows\.net$/i,
+      /^aadcdn\.msauth\.net$/i,
+      /^aadcdn\.msftauth\.net$/i,
+      /^account\.activedirectory\.windowsazure\.com$/i,
+    ].some((pattern) => pattern.test(hostname));
+  } catch (_error) {
+    return false;
   }
 }
 
@@ -1731,20 +1763,9 @@ function renderSidePanelVisibility() {
   elements.sidePanel.classList.toggle("hidden", !state.panelVisible);
   elements.workspaceMain.classList.toggle("panel-hidden", !state.panelVisible);
   elements.dockToggleButton.classList.toggle("panel-open", state.panelVisible);
-  elements.dockToggleButton.textContent = state.panelVisible ? "＞" : "＜";
+  elements.dockToggleButton.textContent = state.panelVisible ? "<" : ">";
   elements.sidePanelTabActions?.classList.toggle("is-hidden", !state.panelVisible);
-  positionDockToggle();
   renderBrowserLayout();
-}
-
-function positionDockToggle() {
-  const dock = elements.dockToggleButton.parentElement;
-  if (!dock) {
-    return;
-  }
-  const sidePanelWidth = state.panelVisible ? Math.max(elements.sidePanel.getBoundingClientRect().width, 0) : 0;
-  const buttonWidth = elements.dockToggleButton.getBoundingClientRect().width || 42;
-  dock.style.right = state.panelVisible ? `${Math.max(Math.round(sidePanelWidth - buttonWidth), 0)}px` : "0px";
 }
 
 function renderPanelTabs() {
@@ -2296,7 +2317,12 @@ function scheduleDashboardTimelinePull() {
   }, 900);
 }
 
-function navigateCurrentBrowserTab(url, title = UI_TEXT.defaultBrowserTitle) {
+async function navigateCurrentBrowserTab(url, title = UI_TEXT.defaultBrowserTitle) {
+  if (shouldOpenInExternalBrowser(url)) {
+    await window.fuzzyApi.openExternalUrl(normalizeUrl(url));
+    toast("Opened in your default browser", "info");
+    return;
+  }
   const activeTab = getActiveTab();
   if (activeTab?.kind === "browser" && activeTab.webviewEl) {
     activeTab.title = title;
@@ -2422,6 +2448,40 @@ function handleExplorerSelection(entry, event = {}) {
   setExplorerSelection([entry.path], entry.path);
 }
 
+function pushExplorerUndoEntry(entry) {
+  if (!entry) {
+    return;
+  }
+  state.explorerUndoStack = [...state.explorerUndoStack, entry].slice(-50);
+}
+
+function clearExplorerClipboard() {
+  state.cutExplorerPaths = [];
+  state.copiedExplorerPaths = [];
+  state.explorerClipboardMode = "";
+}
+
+function getParentPath(targetPath) {
+  const normalized = String(targetPath || "").replace(/[\\\/]+$/, "");
+  const lastSeparatorIndex = Math.max(normalized.lastIndexOf("\\"), normalized.lastIndexOf("/"));
+  if (lastSeparatorIndex <= 0) {
+    return normalized;
+  }
+  return normalized.slice(0, lastSeparatorIndex);
+}
+
+function copySelectedExplorerEntries() {
+  const entries = getSelectedExplorerEntries().filter((entry) => entry && entry.path);
+  if (!entries.length) {
+    return false;
+  }
+  state.copiedExplorerPaths = entries.map((entry) => entry.path);
+  state.cutExplorerPaths = [];
+  state.explorerClipboardMode = "copy";
+  toast(`${entries.length} item copied`, "info");
+  return true;
+}
+
 async function deleteExplorerEntries(entries) {
   const uniqueEntries = [...new Map(entries.map((entry) => [entry.path, entry])).values()];
   if (!uniqueEntries.length) {
@@ -2437,11 +2497,12 @@ async function deleteExplorerEntries(entries) {
     return;
   }
 
-  if (uniqueEntries.length === 1) {
-    await window.fuzzyApi.deleteExplorerEntry(uniqueEntries[0].path);
-  } else {
-    await window.fuzzyApi.deleteExplorerEntries(uniqueEntries.map((entry) => entry.path));
-  }
+  const result = await window.fuzzyApi.deleteExplorerEntriesWithUndo(uniqueEntries.map((entry) => entry.path));
+  pushExplorerUndoEntry({
+    type: "delete",
+    entries: result?.entries || [],
+    directoryPath: state.currentDir || state.rootDir,
+  });
 
   setExplorerSelection([], "");
   await loadDirectory(state.currentDir || state.rootDir, { syncBrowserFromDirectory: false });
@@ -2459,12 +2520,20 @@ function cutSelectedExplorerEntries() {
     return false;
   }
   state.cutExplorerPaths = entries.map((entry) => entry.path);
+  state.copiedExplorerPaths = [];
+  state.explorerClipboardMode = "cut";
   toast(`${entries.length} 件を切り取りました`, "info");
   return true;
 }
 
 async function pasteCutExplorerEntries() {
-  if (!state.cutExplorerPaths.length) {
+  const mode = state.explorerClipboardMode;
+  const sourcePaths = mode === "cut"
+    ? [...state.cutExplorerPaths]
+    : mode === "copy"
+    ? [...state.copiedExplorerPaths]
+    : [];
+  if (!sourcePaths.length) {
     return false;
   }
 
@@ -2476,27 +2545,88 @@ async function pasteCutExplorerEntries() {
     return false;
   }
 
-  const sourcePaths = [...state.cutExplorerPaths];
   const filteredSourcePaths = sourcePaths.filter((entryPath) => entryPath !== destinationDirPath);
   if (!filteredSourcePaths.length) {
-    state.cutExplorerPaths = [];
+    clearExplorerClipboard();
     return false;
   }
 
   try {
-    const result = await window.fuzzyApi.moveExplorerEntries({
-      sourcePaths: filteredSourcePaths,
-      destinationDirPath,
-    });
+    const result = mode === "cut"
+      ? await window.fuzzyApi.moveExplorerEntries({
+        sourcePaths: filteredSourcePaths,
+        destinationDirPath,
+      })
+      : await window.fuzzyApi.copyExplorerEntries({
+        sourcePaths: filteredSourcePaths,
+        destinationDirPath,
+      });
     if (Array.isArray(result?.mappings)) {
       state.mappings = result.mappings;
       renderMappings();
       renderSubmissionFolderButton();
     }
-    state.cutExplorerPaths = [];
+    if (mode === "cut") {
+      pushExplorerUndoEntry({
+        type: "move",
+        entries: filteredSourcePaths.map((sourcePath) => ({
+          sourcePath,
+          destinationPath: `${destinationDirPath.replace(/[\\\/]+$/, "")}\\${sourcePath.split(/[/\\]/).at(-1)}`,
+        })),
+        directoryPath: state.currentDir || state.rootDir,
+      });
+      clearExplorerClipboard();
+    } else {
+      pushExplorerUndoEntry({
+        type: "copy",
+        entries: result?.entries || [],
+        directoryPath: state.currentDir || state.rootDir,
+      });
+    }
     setExplorerSelection([], "");
     await loadDirectory(state.currentDir || state.rootDir, { syncBrowserFromDirectory: false });
     toast(`${result?.movedCount || filteredSourcePaths.length} 件を移動しました`, "success");
+    return true;
+  } catch (error) {
+    toast(error.message, "error");
+    return false;
+  }
+}
+
+async function undoLastExplorerAction() {
+  const entry = state.explorerUndoStack.at(-1);
+  if (!entry) {
+    return false;
+  }
+
+  try {
+    if (entry.type === "delete") {
+      await window.fuzzyApi.restoreDeletedExplorerEntries(entry.entries || []);
+    } else if (entry.type === "copy") {
+      const copiedPaths = (entry.entries || []).map((item) => item.path).filter(Boolean);
+      if (copiedPaths.length) {
+        await window.fuzzyApi.deleteExplorerEntries(copiedPaths);
+      }
+    } else if (entry.type === "move") {
+      for (const moveEntry of entry.entries || []) {
+        await window.fuzzyApi.moveExplorerEntries({
+          sourcePaths: [moveEntry.destinationPath],
+          destinationDirPath: getParentPath(moveEntry.sourcePath),
+        });
+      }
+    } else if (entry.type === "rename") {
+      await window.fuzzyApi.renameExplorerEntry({
+        targetPath: entry.nextPath,
+        nextName: entry.previousPath.split(/[/\\]/).at(-1) || "",
+      });
+    } else if (entry.type === "create") {
+      if (entry.path) {
+        await window.fuzzyApi.deleteExplorerEntries([entry.path]);
+      }
+    }
+    state.explorerUndoStack = state.explorerUndoStack.slice(0, -1);
+    await loadDirectory(entry.directoryPath || state.currentDir || state.rootDir, { syncBrowserFromDirectory: false });
+    toast("Undid last explorer action", "success");
     return true;
   } catch (error) {
     toast(error.message, "error");
@@ -2812,6 +2942,11 @@ async function createExplorerEntry(parentPath, kind) {
     parentPath,
     kind,
   });
+  pushExplorerUndoEntry({
+    type: "create",
+    path: created.path,
+    directoryPath: parentPath,
+  });
   if ((state.currentDir || state.rootDir) === parentPath) {
     await loadDirectory(parentPath, { syncBrowserFromDirectory: false });
   }
@@ -2972,7 +3107,12 @@ function registerDialogTextInput(input, onSubmit) {
 }
 
 async function duplicateExplorerEntry(entry) {
-  await window.fuzzyApi.duplicateExplorerEntry(entry.path);
+  const result = await window.fuzzyApi.duplicateExplorerEntry(entry.path);
+  pushExplorerUndoEntry({
+    type: "copy",
+    entries: [{ path: result?.path, name: entry.name }],
+    directoryPath: state.currentDir || state.rootDir,
+  });
   await loadDirectory(state.currentDir || state.rootDir, { syncBrowserFromDirectory: false });
   toast(`${entry.name} をコピーしました`, "success");
 }
@@ -3012,10 +3152,56 @@ function openExplorerBackgroundMenu(x, y) {
   if (!targetDir) {
     return;
   }
-  showContextMenu([buildExplorerCreateMenu(targetDir)], x, y);
+  const items = [buildExplorerCreateMenu(targetDir)];
+  if (state.cutExplorerPaths.length || state.copiedExplorerPaths.length) {
+    items.push({
+      label: "Paste",
+      action: async () => pasteCutExplorerEntries(),
+    });
+  }
+  showContextMenu(items, x, y);
 }
 
 function openExplorerEntryMenu(entry, x, y) {
+  if (state.selectedExplorerPaths.size > 1 && state.selectedExplorerPaths.has(entry.path)) {
+    showContextMenu([
+      { label: "Copy", action: async () => copySelectedExplorerEntries() },
+      { label: "Cut", action: async () => cutSelectedExplorerEntries() },
+      { label: "Delete", tone: "danger", action: async () => deleteExplorerEntries(getSelectedExplorerEntries()) },
+    ], x, y);
+    return;
+  }
+
+  if (state.selectedExplorerPaths.size <= 1) {
+    const modernItems = [];
+    if (entry.isDirectory) {
+      modernItems.push({
+        label: "Open",
+        action: () => loadDirectory(entry.path, { syncBrowserFromDirectory: true }),
+      });
+    } else {
+      modernItems.push({
+        label: "Open",
+        action: async () => openExplorerEntrySmart(entry),
+      });
+      modernItems.push({
+        label: "Open in New Tab",
+        action: async () => openLocalFileInTab(entry.path, entry.name),
+      });
+    }
+    if (entry.withinRoot !== false) {
+      modernItems.push({ label: "Copy", action: async () => copySelectedExplorerEntries() });
+      modernItems.push({ label: "Cut", action: async () => cutSelectedExplorerEntries() });
+      modernItems.push({ label: "Rename", action: async () => showRenameDialog(entry) });
+      modernItems.push({ label: "Delete", tone: "danger", action: async () => deleteExplorerEntry(entry) });
+      if (!entry.isDirectory) {
+        modernItems.push(buildExplorerOpenWithMenu(entry));
+      }
+      showContextMenu(modernItems, x, y);
+      return;
+    }
+  }
+
   if (state.selectedExplorerPaths.size > 1 && state.selectedExplorerPaths.has(entry.path)) {
     showContextMenu([
       {
@@ -3696,6 +3882,14 @@ function wireEvents() {
     event.stopPropagation();
     if (state.selectedExplorerPaths.size > 0) {
       showContextMenu([
+        { label: "Copy", action: async () => copySelectedExplorerEntries() },
+        { label: "Cut", action: async () => cutSelectedExplorerEntries() },
+        { label: "Delete", tone: "danger", action: async () => deleteExplorerEntries(getSelectedExplorerEntries()) },
+      ], event.clientX, event.clientY);
+      return;
+    }
+    if (state.selectedExplorerPaths.size > 0) {
+      showContextMenu([
         {
           label: "削除",
           tone: "danger",
@@ -3763,12 +3957,29 @@ function wireEvents() {
         return;
       }
     }
+    if ((event.ctrlKey || event.metaKey) && !event.shiftKey && event.key.toLowerCase() === "c") {
+      const active = document.activeElement;
+      const typing = isEditableTarget(active);
+      if (!typing && copySelectedExplorerEntries()) {
+        event.preventDefault();
+        return;
+      }
+    }
     if ((event.ctrlKey || event.metaKey) && !event.shiftKey && event.key.toLowerCase() === "v") {
       const active = document.activeElement;
       const typing = isEditableTarget(active);
-      if (!typing && state.cutExplorerPaths.length) {
+      if (!typing && (state.cutExplorerPaths.length || state.copiedExplorerPaths.length)) {
         event.preventDefault();
         void pasteCutExplorerEntries();
+        return;
+      }
+    }
+    if ((event.ctrlKey || event.metaKey) && !event.shiftKey && event.key.toLowerCase() === "z") {
+      const active = document.activeElement;
+      const typing = isEditableTarget(active);
+      if (!typing && state.explorerUndoStack.length) {
+        event.preventDefault();
+        void undoLastExplorerAction();
         return;
       }
     }
@@ -4196,6 +4407,12 @@ function wireEvents() {
       targetPath: renameDraft.path,
       nextName,
     });
+    pushExplorerUndoEntry({
+      type: "rename",
+      previousPath: renameDraft.path,
+      nextPath: renameResult?.path || "",
+      directoryPath: state.currentDir || state.rootDir,
+    });
     if (Array.isArray(renameResult?.mappings)) {
       state.mappings = renameResult.mappings;
       renderMappings();
@@ -4228,7 +4445,6 @@ function wireEvents() {
   registerDialogTextInput(elements.downloadFileNameInput, () => elements.downloadSaveButton.click());
   registerDialogTextInput(elements.renameFileNameInput, () => elements.renameSaveButton.click());
 
-  window.addEventListener("resize", positionDockToggle);
   window.addEventListener("resize", hideContextMenu);
   window.addEventListener("resize", renderBrowserLayout);
 }
@@ -4318,7 +4534,10 @@ window.fuzzyApi.onOpenPreviewFile((payload) => {
 });
 
 window.fuzzyApi.onShortcutInput((payload) => {
-  const editable = isEditableTarget(document.activeElement);
+  if (payload?.source === "main" && isEmbeddedBrowserFocused()) {
+    return;
+  }
+  const editable = Boolean(payload?.editable) || isEditableTarget(document.activeElement);
   void handleShortcutInput(payload, { editable });
 });
 

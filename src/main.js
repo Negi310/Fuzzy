@@ -1023,6 +1023,36 @@ function isGoogleOrigin(target = "") {
   }
 }
 
+function buildExplorerUndoTrashDir() {
+  const dirPath = path.join(app.getPath("userData"), "explorer-undo-trash");
+  ensureDirectory(dirPath);
+  return dirPath;
+}
+
+function moveExplorerEntryToUndoTrash(targetPath) {
+  const trashDir = buildExplorerUndoTrashDir();
+  const uniqueName = `${Date.now()}-${Math.random().toString(36).slice(2, 10)}-${path.basename(targetPath)}`;
+  const trashedPath = path.join(trashDir, uniqueName);
+  fs.renameSync(targetPath, trashedPath);
+  return trashedPath;
+}
+
+function copyExplorerEntry(sourcePath, destinationDirPath) {
+  const targetPath = uniqueFilePath(path.join(destinationDirPath, path.basename(sourcePath)));
+  const stats = fs.statSync(sourcePath);
+  if (stats.isDirectory()) {
+    fs.cpSync(sourcePath, targetPath, { recursive: true });
+  } else {
+    fs.copyFileSync(sourcePath, targetPath);
+  }
+  return {
+    sourcePath,
+    path: targetPath,
+    isDirectory: stats.isDirectory(),
+    name: path.basename(targetPath),
+  };
+}
+
 function shouldAllowStorageAccessPermission(permission, requestingOrigin = "", details = {}) {
   if (!["storage-access", "top-level-storage-access"].includes(permission)) {
     return false;
@@ -1519,6 +1549,13 @@ function sendBlockedNavigationMessage(message) {
     message,
   });
   shell.beep();
+}
+
+function openBlockedUrlExternally(targetUrl, message) {
+  if (targetUrl) {
+    void shell.openExternal(targetUrl).catch(() => {});
+  }
+  sendBlockedNavigationMessage(message);
 }
 
 function emitRemotePdfOpen(sourceContentsId, pdfUrl) {
@@ -2346,6 +2383,16 @@ app.whenReady().then(() => {
       }
     });
 
+    contents.on("will-navigate", (event, targetUrl) => {
+      if (isDownloadLikeUrl(targetUrl) || isAllowedUrl(targetUrl)) {
+        return;
+      }
+      if (!event.defaultPrevented) {
+        event.preventDefault();
+      }
+      openBlockedUrlExternally(targetUrl, "Opened this page in your default browser because the in-app browser blocks it.");
+    });
+
     contents.setWindowOpenHandler(({ url }) => {
       if (isDownloadLikeUrl(url)) {
         const tabId = webContentsToTab.get(contents.id);
@@ -2370,7 +2417,7 @@ app.whenReady().then(() => {
           courseName: "Moodle",
         });
       } else {
-        sendBlockedNavigationMessage("和歌山大学 Moodle 関連以外の新規ウィンドウは開けません。");
+        openBlockedUrlExternally(url, "Opened this page in your default browser because the in-app browser blocks it.");
       }
 
       return { action: "deny" };
@@ -2578,6 +2625,15 @@ ipcMain.handle("app:update:install", () => {
     ok: true,
     ...getAutoUpdateStatus(),
   };
+});
+
+ipcMain.handle("app:open-external", async (_event, targetUrl) => {
+  const normalizedUrl = String(targetUrl || "").trim();
+  if (!normalizedUrl) {
+    throw new Error("URL is required.");
+  }
+  await shell.openExternal(normalizedUrl);
+  return { ok: true };
 });
 
 ipcMain.handle("state:get", async () => buildInitialState());
@@ -2871,6 +2927,92 @@ ipcMain.handle("explorer:delete-many", async (_event, targetPaths) => {
   }
 
   return { ok: true };
+});
+
+ipcMain.handle("explorer:copy", async (_event, payload) => {
+  const rootDir = getRootDir();
+  const destinationDirPath = path.resolve(String(payload?.destinationDirPath || ""));
+  const sourcePaths = Array.isArray(payload?.sourcePaths)
+    ? [...new Set(payload.sourcePaths.map((entry) => path.resolve(String(entry || ""))).filter(Boolean))]
+    : [];
+
+  if (!sourcePaths.length) {
+    throw new Error("Copy source is not available.");
+  }
+  if (!destinationDirPath || !isSubPath(rootDir, destinationDirPath) || !fs.existsSync(destinationDirPath)) {
+    throw new Error("Copy destination folder is not available.");
+  }
+  if (!fs.statSync(destinationDirPath).isDirectory()) {
+    throw new Error("Copy destination must be a folder.");
+  }
+
+  const copiedEntries = [];
+  for (const sourcePath of sourcePaths) {
+    if (!isSubPath(rootDir, sourcePath) || !fs.existsSync(sourcePath)) {
+      throw new Error("Copy source is not available.");
+    }
+    copiedEntries.push(copyExplorerEntry(sourcePath, destinationDirPath));
+  }
+
+  return {
+    ok: true,
+    copiedCount: copiedEntries.length,
+    entries: copiedEntries,
+  };
+});
+
+ipcMain.handle("explorer:delete-with-undo", async (_event, targetPaths) => {
+  const rootDir = getRootDir();
+  const paths = Array.isArray(targetPaths)
+    ? [...new Set(targetPaths.map((entry) => path.resolve(String(entry || ""))).filter(Boolean))]
+    : [];
+  if (!paths.length) {
+    throw new Error("Delete target is not available.");
+  }
+
+  const deletedEntries = [];
+  for (const targetPath of paths) {
+    if (!isSubPath(rootDir, targetPath) || !fs.existsSync(targetPath)) {
+      throw new Error("Delete target is not available.");
+    }
+    const stats = fs.statSync(targetPath);
+    const trashedPath = moveExplorerEntryToUndoTrash(targetPath);
+    deletedEntries.push({
+      originalPath: targetPath,
+      trashedPath,
+      isDirectory: stats.isDirectory(),
+      name: path.basename(targetPath),
+    });
+  }
+
+  return {
+    ok: true,
+    deletedCount: deletedEntries.length,
+    entries: deletedEntries,
+  };
+});
+
+ipcMain.handle("explorer:restore-deleted", async (_event, entries) => {
+  const rootDir = getRootDir();
+  const restoreEntries = Array.isArray(entries) ? entries : [];
+  if (!restoreEntries.length) {
+    throw new Error("Restore target is not available.");
+  }
+
+  for (const entry of restoreEntries) {
+    const originalPath = path.resolve(String(entry?.originalPath || ""));
+    const trashedPath = path.resolve(String(entry?.trashedPath || ""));
+    if (!originalPath || !trashedPath || !isSubPath(rootDir, originalPath) || !fs.existsSync(trashedPath)) {
+      throw new Error("Restore target is not available.");
+    }
+    ensureDirectory(path.dirname(originalPath));
+    if (fs.existsSync(originalPath)) {
+      throw new Error(`${path.basename(originalPath)} already exists.`);
+    }
+    fs.renameSync(trashedPath, originalPath);
+  }
+
+  return { ok: true, restoredCount: restoreEntries.length };
 });
 
 ipcMain.handle("explorer:move", async (_event, payload) => {

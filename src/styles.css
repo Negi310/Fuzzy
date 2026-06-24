@@ -455,6 +455,7 @@ button {
 }
 
 .side-panel {
+  position: relative;
   min-width: 0;
   min-height: 0;
   overscroll-behavior: contain;
@@ -463,13 +464,15 @@ button {
 
 .side-panel.hidden {
   width: 0;
-  opacity: 0;
-  transform: translateX(14px);
-  pointer-events: none;
+  opacity: 1;
+  transform: none;
+  pointer-events: auto;
+  overflow: visible;
 }
 
 .side-panel.hidden .side-panel-inner {
-  visibility: hidden;
+  visibility: visible;
+  overflow: visible;
 }
 
 .side-panel-inner {
@@ -483,9 +486,19 @@ button {
   display: flex;
   gap: 0;
   align-items: end;
-  padding: 6px 8px 0;
+  padding: 6px 8px 0 0;
   border-bottom: 1px solid #dfe8f2;
   background: linear-gradient(180deg, #f5f8fb 0, #ffffff 100%);
+}
+
+.side-panel.hidden .side-panel-tabs {
+  position: absolute;
+  top: 0;
+  right: 0;
+  gap: 0;
+  padding: 6px 0 0;
+  border-bottom: 0;
+  background: transparent;
 }
 
 .side-panel-tab-actions {
@@ -495,12 +508,19 @@ button {
   padding: 0 8px 4px 12px;
 }
 
+.side-panel.hidden .side-tab-button,
+.side-panel.hidden .side-panel-tab-actions,
+.side-panel.hidden .panel-view {
+  display: none;
+}
+
 .side-tab-button {
-  padding: 10px 16px;
+  padding: 9px 15px;
   border-bottom-left-radius: 0;
   border-bottom-right-radius: 0;
   border-bottom: 0;
   font-weight: 600;
+  font-size: 14px;
   background: #f1f5fa;
 }
 
@@ -925,37 +945,44 @@ button {
   color: #5a6b84;
 }
 
-.panel-dock {
-  position: fixed;
-  right: 0;
-  bottom: 18px;
-  display: flex;
-  z-index: 20;
-  transition: right 180ms ease;
-}
-
 .dock-toggle-button {
-  width: 42px;
-  height: 88px;
+  width: 18px;
+  height: 32px;
+  margin: 0 6px 0 0;
+  padding: 0;
   border: 1px solid #cbd8e6;
   border-right: 0;
-  border-radius: 44px 0 0 44px;
-  background: rgba(255, 255, 255, 0.98);
-  box-shadow: 0 10px 22px rgba(19, 39, 67, 0.14);
+  border-radius: 18px 0 0 18px;
+  background: linear-gradient(180deg, #f7fbff 0, #edf4fb 100%);
+  box-shadow: 0 3px 10px rgba(19, 39, 67, 0.08);
   cursor: pointer;
   color: #4c5d76;
-  font-size: 22px;
+  font-size: 11px;
   font-weight: 600;
   line-height: 1;
-  transition: border-radius 180ms ease, border-left-color 180ms ease, border-right-color 180ms ease;
+  transition: width 150ms ease, background 140ms ease, border-color 140ms ease, box-shadow 140ms ease;
   display: grid;
   place-items: center;
+  flex: 0 0 auto;
+  align-self: stretch;
+}
+
+.side-panel.hidden .dock-toggle-button {
+  margin-right: 0;
+}
+
+.dock-toggle-button:hover {
+  width: 30px;
+  background: #ffffff;
+  border-color: #b8cbe2;
+  box-shadow: 0 5px 14px rgba(19, 39, 67, 0.12);
 }
 
 .dock-toggle-button.panel-open {
-  border-left: 1px solid #cbd8e6;
-  border-right: 0;
-  border-radius: 0 44px 44px 0;
+  border-left: 0;
+  border-right: 1px solid #cbd8e6;
+  border-radius: 0 18px 18px 0;
+  background: #ffffff;
 }
 
 .settings-dialog,
