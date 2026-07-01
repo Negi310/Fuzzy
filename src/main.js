@@ -25,6 +25,7 @@ const ALLOWED_HOST_PATTERNS = [
   /^moodle(?:\d{4})?\.wakayama-u\.ac\.jp$/i,
   /^wakayama-u\.ac\.jp$/i,
   /^www\.wakayama-u\.ac\.jp$/i,
+  /^evp\.center\.wakayama-u\.ac\.jp$/i,
   /^gemini\.google\.com$/i,
   /^notebooklm\.google\.com$/i,
   /^accounts\.google\.com$/i,
@@ -1475,6 +1476,23 @@ async function buildDragIcon(targetPath) {
   );
 }
 
+function buildDragIconFromDataUrl(iconDataUrl) {
+  if (typeof iconDataUrl === "string" && iconDataUrl.startsWith("data:image/")) {
+    try {
+      const icon = nativeImage.createFromDataURL(iconDataUrl);
+      if (!icon.isEmpty()) {
+        return icon;
+      }
+    } catch (_error) {
+      // Fall through to the generated icon when the renderer payload is invalid.
+    }
+  }
+
+  return nativeImage.createFromDataURL(
+    "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAQAAAAAYLlVAAAA8ElEQVR4Ae3XsQ2DQBBF0Q+NQY4M4QLM4Bys4AnM4AjOwN1QHyvDOMkMt2rt7Nmzu13R5pTKty+O+kO5RAAAAAAAAAAAAICR9wMyoVo9hw3rroWAt4EvsC0BpvyEukgqS0bkkCm1cW0BpGbkADVYAKjwxKF1uHmIiiaTZGi4ZTSdKCbFf8gDuwZQhQAEjrISFRCGDpa2BkLomqKgJo0aoArkC5AOIDMDEwZ0AqSdzdrIW6DCQE4kYvNysGEKMluSleqrs9jwELyhlHLLJoPLD114F8nGMD4HzyBbs6k8ZZrguSu2Ce279b9Ec/WWavOXJeAAAAAAAAAAAAAACA74B/A9vywgq6Z9YAAAAASUVORK5CYII="
+  );
+}
+
 function sendToRenderer(channel, payload) {
   if (mainWindow && !mainWindow.isDestroyed()) {
     try {
@@ -1692,6 +1710,12 @@ function createWindow() {
   mainWindow.on("app-command", (event, command) => {
     event.preventDefault();
     forwardAppCommandAsShortcut(command);
+  });
+  mainWindow.webContents.on("render-process-gone", (_event, details) => {
+    console.error("[renderer-gone]", details);
+  });
+  app.on("child-process-gone", (_event, details) => {
+    console.error("[child-process-gone]", details);
   });
   mainWindow.loadFile(path.join(__dirname, "index.html"));
   mainWindow.webContents.once("did-finish-load", () => {
@@ -3070,17 +3094,23 @@ ipcMain.handle("explorer:move", async (_event, payload) => {
   };
 });
 
-ipcMain.on("explorer:start-drag", async (event, targetPath) => {
-  const resolvedPath = path.resolve(targetPath || "");
+ipcMain.on("explorer:start-drag", (event, payload) => {
+  const resolvedPath = path.resolve(
+    (payload && typeof payload === "object" ? payload.targetPath : payload) || ""
+  );
   if (!fs.existsSync(resolvedPath)) {
     return;
   }
 
-  const icon = await buildDragIcon(resolvedPath);
-  event.sender.startDrag({
-    file: resolvedPath,
-    icon,
-  });
+  try {
+    const icon = buildDragIconFromDataUrl(payload && typeof payload === "object" ? payload.iconDataUrl : "");
+    event.sender.startDrag({
+      file: resolvedPath,
+      icon,
+    });
+  } catch (_error) {
+    // Ignore drag handoff failures so in-app DnD continues to work.
+  }
 });
 
 ipcMain.handle("download:resolve", async (_event, payload) => {
