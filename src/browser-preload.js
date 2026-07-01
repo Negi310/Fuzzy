@@ -111,12 +111,81 @@ function deriveCourseName() {
   return fallbackCourseNameFromDom();
 }
 
+function findCourseAnchor() {
+  const selectors = [
+    ".breadcrumb a[href*='/course/view.php?id=']",
+    ".page-context-header a[href*='/course/view.php?id=']",
+    "header a[href*='/course/view.php?id=']",
+    "a[href*='/course/view.php?id=']",
+  ];
+  const anchors = selectors.flatMap((selector) => [...document.querySelectorAll(selector)]);
+  return anchors.find((anchor) => {
+    try {
+      const parsed = new URL(anchor.href, location.href);
+      return isWakayamaMoodlePage(parsed.toString()) && Boolean(parsed.searchParams.get("id"));
+    } catch (_error) {
+      return false;
+    }
+  }) || null;
+}
+
+function readCourseAnchorContext() {
+  const courseAnchor = findCourseAnchor();
+  if (!courseAnchor) {
+    return {
+      courseName: "",
+      courseId: "",
+      courseUrl: "",
+    };
+  }
+
+  const courseUrl = courseAnchor.href || "";
+  return {
+    courseName: normalizeTitle(courseAnchor.textContent || "") || fallbackCourseNameFromDom(),
+    courseId: extractCourseId(courseUrl),
+    courseUrl,
+  };
+}
+
+function getMoodlePageKind(targetUrl) {
+  if (!isWakayamaMoodlePage(targetUrl)) {
+    return "outside";
+  }
+
+  try {
+    const parsed = new URL(targetUrl);
+    const pathname = parsed.pathname.toLowerCase();
+    if (pathname.endsWith("/course/view.php") && parsed.searchParams.get("id")) {
+      return "course";
+    }
+    if (pathname.endsWith("/mod/assign/view.php")) {
+      return "submission";
+    }
+    return "other";
+  } catch (_error) {
+    return "outside";
+  }
+}
+
 function readCourseContext() {
+  const pageKind = getMoodlePageKind(location.href);
+  const pageCourseName = deriveCourseName();
+  const fallbackContext = readCourseAnchorContext();
+  const courseContext = pageKind === "course"
+    ? {
+      courseName: pageCourseName,
+      courseId: extractCourseId(location.href),
+      courseUrl: location.href,
+    }
+    : fallbackContext;
+
   safeSendToHost("page-context", {
     url: location.href,
     title: document.title,
-    courseName: deriveCourseName(),
-    courseId: extractCourseId(location.href),
+    pageKind,
+    courseName: courseContext.courseName,
+    courseId: courseContext.courseId,
+    courseUrl: courseContext.courseUrl,
   });
 }
 
@@ -203,6 +272,12 @@ function handleShortcutMouse(event) {
     editable: isEditableElement(event.target),
   });
 }
+
+function reportShortcutFocus(target) {
+  safeSendToHost("shortcut-focus", {
+    editable: isEditableElement(target),
+  });
+}
 const scheduleCourseContextUpdate = debounce(readCourseContext, 200);
 
 window.addEventListener("DOMContentLoaded", () => {
@@ -217,6 +292,12 @@ window.addEventListener("DOMContentLoaded", () => {
 
   document.addEventListener("click", () => {
     setTimeout(readCourseContext, 80);
+  }, true);
+  document.addEventListener("focusin", (event) => {
+    reportShortcutFocus(event.target);
+  }, true);
+  document.addEventListener("focusout", () => {
+    setTimeout(() => reportShortcutFocus(document.activeElement), 0);
   }, true);
   document.addEventListener("keydown", handleShortcutKeydown, true);
   document.addEventListener("mousedown", handleShortcutMouse, true);

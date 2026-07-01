@@ -24,7 +24,7 @@ contextBridge.exposeInMainWorld("fuzzyApi", {
   startCustomDownload: (payload) => ipcRenderer.invoke("download:start-custom", payload),
   openRemoteFileTab: (payload) => ipcRenderer.invoke("file:open-remote", payload),
   cleanupPreviewFile: (targetPath) => ipcRenderer.invoke("preview:cleanup", targetPath),
-  startExplorerDrag: (targetPath) => ipcRenderer.send("explorer:start-drag", targetPath),
+  startExplorerDrag: (payload) => ipcRenderer.send("explorer:start-drag", payload),
   uploadFilesToTab: (payload) => ipcRenderer.invoke("webview:upload-files", payload),
   duplicateExplorerEntry: (targetPath) => ipcRenderer.invoke("explorer:duplicate", targetPath),
   copyExplorerEntries: (payload) => ipcRenderer.invoke("explorer:copy", payload),

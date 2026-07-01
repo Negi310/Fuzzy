@@ -34,6 +34,7 @@ const SHORTCUT_ACTIONS = [
   { id: "favorite3", label: "お気に入りページ3" },
   { id: "openExplorerPanel", label: "エクスプローラー開く" },
   { id: "openTimelinePanel", label: "タイムライン開く" },
+  { id: "toggleSidePanel", label: "右パネル表示切替" },
   { id: "openRootFolder", label: "Fuzitterフォルダを開く" },
   { id: "refreshPanel", label: "更新" },
   { id: "openSettings", label: "設定" },
@@ -63,6 +64,7 @@ const state = {
   panelVisible: true,
   dashboardLoaded: false,
   dashboardAutoload: false,
+  pendingTimelineNavigation: null,
   pendingMappingCourse: null,
   mappingPromptedCourses: new Set(),
   selectedExplorerPaths: new Set(),
@@ -90,6 +92,7 @@ const state = {
   lastShortcutSignature: "",
   lastShortcutAt: 0,
   dialogFocusLock: false,
+  embeddedBrowserEditable: false,
 };
 
 const elements = {
@@ -683,6 +686,20 @@ function shouldPromptForCourseMapping(tab) {
     url: tab?.courseUrl || tab?.url || "",
     title: tab?.title || "",
   }) === "course";
+}
+
+function isSubmissionPageContext(context = {}) {
+  if (context?.pageKind === "submission") {
+    return true;
+  }
+
+  try {
+    const parsed = new URL(context?.url || "");
+    return /moodle(?:\d{4})?\.wakayama-u\.ac\.jp$/i.test(parsed.hostname)
+      && parsed.pathname.toLowerCase().endsWith("/mod/assign/view.php");
+  } catch (_error) {
+    return false;
+  }
 }
 
 function extractCourseIdFromUrl(targetUrl) {
@@ -1594,7 +1611,7 @@ function getExplorerFileIcon(entry) {
   if (["txt", "md", "rtf", "log", "js", "json", "html", "css", "py", "java", "c", "cpp", "ts", "tsx", "jsx"].includes(extension)) {
     return { label: "TEXT", glyph: "T", classNames: ["document", "text"], kind: "text" };
   }
-  return { label: "FILE", glyph: "F", classNames: ["document", "file"], kind: "file" };
+  return { label: "TEXT", glyph: "T", classNames: ["document", "text"], kind: "text" };
 }
 
 function buildExplorerIconMarkup(entry, icon) {
@@ -1848,6 +1865,10 @@ async function executeShortcutAction(actionId) {
     case "openTimelinePanel":
       setPanelTab("timeline");
       return true;
+    case "toggleSidePanel":
+      state.panelVisible = !state.panelVisible;
+      renderSidePanelVisibility();
+      return true;
     case "openRootFolder":
       return await openRootFolderAction();
     case "refreshPanel":
@@ -1907,6 +1928,7 @@ function focusBrowserSurface(tab) {
     return;
   }
   if (!tab?.webviewEl || tab.kind !== "browser") {
+    state.embeddedBrowserEditable = false;
     return;
   }
   setTimeout(() => {
@@ -1958,6 +1980,7 @@ function createBrowserTab(url, title = UI_TEXT.defaultBrowserTitle, options = {}
     courseName: "",
     courseId: "",
     courseUrl: "",
+    pageKind: "",
     contentEl: null,
     webviewEl: null,
     webContentsId: null,
@@ -2202,12 +2225,37 @@ function scheduleDashboardTimelinePull() {
           ];
 
           const collect = () => {
-            const eventNames = [
-              ...document.querySelectorAll("h6.event-name.mb-0.pb-1.text-truncate")
+            const eventTitleSelectors = [
+              "h6.event-name.mb-0.pb-1.text-truncate",
+              ".event-name a[href]",
+              ".event-name",
+              "[data-region*='timeline'] a[href*='/mod/assign/view.php']",
+              ".block_timeline a[href*='/mod/assign/view.php']",
+              ".timeline a[href*='/mod/assign/view.php']",
             ];
+            const eventNames = eventTitleSelectors
+              .flatMap((selector) => [...document.querySelectorAll(selector)])
+              .filter((node, index, array) => node && array.indexOf(node) === index);
+            const findCourseAnchor = (node) => {
+              const scopes = [
+                node?.closest("li, article, .event, .list-group-item, .activity-item, tr, .timeline-event"),
+                node?.closest("[data-region*='timeline']"),
+                node?.parentElement,
+              ].filter(Boolean);
+              for (const scope of scopes) {
+                const match = scope.querySelector("a[href*='/course/view.php?id=']");
+                if (match) {
+                  return match;
+                }
+              }
+              return [...document.querySelectorAll("a[href*='/course/view.php?id=']")].find((anchor) => {
+                const text = String(anchor.textContent || "").replace(/\\s+/g, " ").trim();
+                return text && String(node?.textContent || "").includes(text);
+              }) || null;
+            };
             const seen = new Set();
             const items = eventNames.flatMap((eventName) => {
-              const anchor = eventName.querySelector("a[href]");
+              const anchor = eventName.matches("a[href]") ? eventName : eventName.querySelector("a[href]");
               const href = anchor?.href || "";
               const ariaSource = eventName.matches("[aria-label]")
                 ? eventName
@@ -2223,13 +2271,20 @@ function scheduleDashboardTimelinePull() {
               seen.add(href);
               const container = eventName.closest("li, article, .event, .list-group-item, .activity-item, tr, .timeline-event");
               const nearbyText = (container?.textContent || "").replace(/\\s+/g, " ").trim();
-              const match = href.match(/[?&]id=(\\d+)/);
+              const courseAnchor = findCourseAnchor(eventName);
+              const courseUrl = courseAnchor?.href || "";
+              const courseMatch = courseUrl.match(/[?&]id=(\\d+)/);
+              const derivedCourseName = (
+                courseAnchor?.textContent
+                || nearbyText.replace(label, "").trim()
+              ).replace(/\\s+/g, " ").trim();
               return [{
                 id: href + "::" + label,
                 href,
                 title: label,
-                courseName: nearbyText.replace(label, "").trim().slice(0, 120),
-                courseId: match ? match[1] : "",
+                courseName: derivedCourseName.slice(0, 120),
+                courseId: courseMatch ? courseMatch[1] : "",
+                courseUrl,
                 rawText: nearbyText
               }];
             });
@@ -2305,6 +2360,7 @@ function scheduleDashboardTimelinePull() {
             `sample: ${(result?.primaryAnchorPreview?.[0] || result?.fallbackAnchorPreview?.[0] || "-").replace(/\\s+/g, " ")}`,
           ].join(" | "),
         };
+      flushPendingTimelineNavigation();
       renderTimeline();
     } catch (_error) {
       state.timelineEntries = [];
@@ -2340,6 +2396,79 @@ function findMappingForCourse(courseName) {
     const entryNormalized = normalizeCourseTitle(entry.courseName);
     return entry.courseName === courseName || entryNormalized === normalized;
   }) || null;
+}
+
+function timelineEntryMatchesMapping(entry, mapping) {
+  if (!entry || !mapping) {
+    return false;
+  }
+
+  const entryCourseId = String(entry.courseId || "");
+  const mappingCourseId = String(mapping.courseId || extractCourseIdFromUrl(mapping.courseUrl || ""));
+  if (entryCourseId && mappingCourseId && entryCourseId === mappingCourseId) {
+    return true;
+  }
+
+  const entryCourseName = normalizeCourseTitle(entry.courseName || "");
+  const mappingCourseName = normalizeCourseTitle(mapping.courseName || "");
+  return Boolean(entryCourseName && mappingCourseName && entryCourseName === mappingCourseName);
+}
+
+function findTimelineEntryForMapping(mapping) {
+  if (!mapping) {
+    return null;
+  }
+
+  const visibleEntries = state.timelineEntries.filter((entry) => !shouldHideTimelineEntry(entry));
+  const matchingEntries = visibleEntries.filter((entry) => timelineEntryMatchesMapping(entry, mapping));
+  if (!matchingEntries.length) {
+    return null;
+  }
+
+  const assignmentEntries = matchingEntries.filter((entry) => /\/mod\/assign\/view\.php/i.test(entry.href || ""));
+  return (assignmentEntries.length ? assignmentEntries : matchingEntries)
+    .sort(compareTimelineEntries)[0] || null;
+}
+
+function queueTimelineNavigationForMapping(mapping) {
+  if (!mapping) {
+    state.pendingTimelineNavigation = null;
+    return;
+  }
+
+  state.pendingTimelineNavigation = {
+    courseId: String(mapping.courseId || extractCourseIdFromUrl(mapping.courseUrl || "")),
+    courseName: normalizeCourseTitle(mapping.courseName || ""),
+    courseUrl: mapping.courseUrl || "",
+  };
+}
+
+function flushPendingTimelineNavigation() {
+  const pending = state.pendingTimelineNavigation;
+  if (!pending) {
+    return false;
+  }
+
+  const mapping = state.mappings.find((entry) => {
+    const entryCourseId = String(entry.courseId || extractCourseIdFromUrl(entry.courseUrl || ""));
+    const entryCourseName = normalizeCourseTitle(entry.courseName || "");
+    return (
+      (pending.courseId && entryCourseId === pending.courseId) ||
+      (pending.courseName && entryCourseName === pending.courseName) ||
+      (pending.courseUrl && entry.courseUrl === pending.courseUrl)
+    );
+  }) || null;
+  const timelineEntry = findTimelineEntryForMapping(mapping);
+  if (!timelineEntry) {
+    return false;
+  }
+
+  state.pendingTimelineNavigation = null;
+  void navigateCurrentBrowserTab(
+    timelineEntry.href,
+    timelineEntry.title || mapping?.courseName || UI_TEXT.defaultBrowserTitle
+  );
+  return true;
 }
 
 function findMappingForTab(tab) {
@@ -2468,6 +2597,19 @@ function getParentPath(targetPath) {
     return normalized;
   }
   return normalized.slice(0, lastSeparatorIndex);
+}
+
+function shouldUseNativeExternalFileDrag(entry) {
+  if (!entry || entry.isDirectory) {
+    return false;
+  }
+  if (state.selectedExplorerPaths.size > 1) {
+    return false;
+  }
+  if (getExplorerFileIcon(entry).kind === "file") {
+    return false;
+  }
+  return true;
 }
 
 function copySelectedExplorerEntries() {
@@ -2784,6 +2926,12 @@ function mountBrowserLikeTab(tab, usePreload = true) {
       void handleShortcutInput(payload, { editable: Boolean(payload.editable) });
       return;
     }
+    if (event.channel === "shortcut-focus") {
+      if (tab.id === state.activeTabId) {
+        state.embeddedBrowserEditable = Boolean(payload?.editable);
+      }
+      return;
+    }
     if (event.channel !== "page-context") {
       return;
     }
@@ -2791,14 +2939,16 @@ function mountBrowserLikeTab(tab, usePreload = true) {
     const pageType = classifyMoodlePage(payload);
     tab.url = payload.url || tab.url;
     if (isExplorerLinkedTab(tab)) {
-      tab.courseUrl = payload.url || tab.courseUrl || tab.url;
-      tab.courseId = payload.courseId || extractCourseIdFromUrl(tab.url);
-      tab.courseName = pageType === "course" ? normalizeCourseTitle(payload.courseName || "") : "";
+      tab.pageKind = payload.pageKind || (pageType === "course" ? "course" : "");
+      tab.courseUrl = payload.courseUrl || payload.url || tab.courseUrl || tab.url;
+      tab.courseId = payload.courseId || extractCourseIdFromUrl(tab.courseUrl || tab.url);
+      tab.courseName = normalizeCourseTitle(payload.courseName || "");
       tab.title = tab.courseName || payload.title || tab.title;
     } else {
       tab.courseUrl = "";
       tab.courseId = "";
       tab.courseName = "";
+      tab.pageKind = "";
       tab.title = payload.title || tab.title;
     }
 
@@ -2815,6 +2965,16 @@ function mountBrowserLikeTab(tab, usePreload = true) {
     if (tab.id === state.activeTabId) {
       void updateCurrentCourse(tab);
       syncAddressBar();
+    }
+
+    if (tab.id === state.activeTabId && isSubmissionPageContext({
+      url: tab.url,
+      pageKind: tab.pageKind,
+    })) {
+      const mapping = findMappingForTab(tab) || findMappingForCourse(tab.courseName);
+      if (mapping?.submissionFolderPath && !isWithinPath(state.currentDir, mapping.submissionFolderPath)) {
+        void loadDirectory(mapping.submissionFolderPath, { syncBrowserFromDirectory: false });
+      }
     }
 
     renderBrowserTabs();
@@ -2839,16 +2999,26 @@ function syncTabFromWebview(tab) {
   tab.url = tab.webviewEl.getURL();
   const htmlTitle = tab.webviewEl.getTitle() || tab.title;
   const pageType = classifyMoodlePage({ url: tab.url, title: htmlTitle });
+  const nextPageKind = isSubmissionPageContext({ url: tab.url })
+    ? "submission"
+    : (pageType === "course" ? "course" : "");
   if (isExplorerLinkedTab(tab)) {
-    const courseName = pageType === "course" ? normalizeCourseTitle(deriveCourseNameFromTitle(htmlTitle)) : "";
+    const courseName = pageType === "course"
+      ? normalizeCourseTitle(deriveCourseNameFromTitle(htmlTitle))
+      : tab.courseName;
+    const courseUrl = nextPageKind === "submission"
+      ? (tab.courseUrl || tab.url)
+      : tab.url;
     tab.courseName = courseName;
-    tab.courseId = extractCourseIdFromUrl(tab.url);
-    tab.courseUrl = tab.url;
+    tab.courseId = extractCourseIdFromUrl(courseUrl || tab.url);
+    tab.courseUrl = courseUrl;
+    tab.pageKind = nextPageKind;
     tab.title = courseName || htmlTitle || tab.title;
   } else {
     tab.courseName = "";
     tab.courseId = "";
     tab.courseUrl = "";
+    tab.pageKind = "";
     tab.title = htmlTitle || tab.title;
   }
 
@@ -3416,6 +3586,7 @@ function activateTab(tabId, options = {}) {
     }
   }
   state.activeTabId = tabId;
+  state.embeddedBrowserEditable = false;
   renderBrowserTabs();
   renderBrowserLayout();
   syncAddressBar();
@@ -3437,12 +3608,15 @@ function openWebLinkMenu(payload) {
 }
 
 async function updateCurrentCourse(tab) {
-  const courseName = isExplorerLinkedTab(tab) && shouldPromptForCourseMapping(tab)
+  const shouldSyncCourse = isExplorerLinkedTab(tab) && (
+    shouldPromptForCourseMapping(tab) || isSubmissionPageContext(tab)
+  );
+  const courseName = shouldSyncCourse
     ? getDisplayCourseName(tab?.courseName)
     : UI_TEXT.noCourse;
   elements.activeCourseLabel.textContent = courseName;
 
-  if (isExplorerLinkedTab(tab) && tab?.courseName && shouldPromptForCourseMapping(tab)) {
+  if (shouldSyncCourse && tab?.courseName) {
     const ensuredMapping = await ensureCourseMapping(tab);
     if (ensuredMapping?.needsPrompt) {
       renderSubmissionFolderButton();
@@ -3451,7 +3625,10 @@ async function updateCurrentCourse(tab) {
     }
     const mapping = ensuredMapping || findMappingForTab(tab) || findMappingForCourse(tab.courseName);
     if (mapping) {
-      await loadDirectory(mapping.folderPath, { syncBrowserFromDirectory: false });
+      const targetPath = isSubmissionPageContext(tab) && mapping.submissionFolderPath
+        ? mapping.submissionFolderPath
+        : mapping.folderPath;
+      await loadDirectory(targetPath, { syncBrowserFromDirectory: false });
     }
   }
 
@@ -3529,13 +3706,20 @@ function renderDirectory(entries) {
         setExplorerSelection([entry.path], entry.path);
         renderExplorerSelectionState();
       }
+      const useNativeExternalDrag = shouldUseNativeExternalFileDrag(entry);
       state.draggedExplorerPaths = state.selectedExplorerPaths.has(entry.path)
         ? [...state.selectedExplorerPaths]
         : [entry.path];
+      if (useNativeExternalDrag) {
+        event.preventDefault();
+      }
       event.dataTransfer.effectAllowed = "copy";
       event.dataTransfer.setData("text/plain", entry.path);
-      if (!entry.isDirectory) {
-        window.fuzzyApi.startExplorerDrag(entry.path);
+      if (useNativeExternalDrag) {
+        window.fuzzyApi.startExplorerDrag({
+          targetPath: entry.path,
+          iconDataUrl: entry.iconDataUrl || "",
+        });
       }
     });
 
@@ -3624,7 +3808,25 @@ async function loadDirectory(targetPath, options = {}) {
     const mapping = findMappingForPath(result.currentDir);
     if (mapping) {
       const activeTab = getActiveTab();
-      if (mapping.courseUrl && activeTab?.kind === "browser" && isExplorerLinkedTab(activeTab) && activeTab.courseUrl !== mapping.courseUrl) {
+      const isSubmissionFolder = Boolean(
+        mapping.submissionFolderPath && isWithinPath(result.currentDir, mapping.submissionFolderPath)
+      );
+      if (isSubmissionFolder) {
+        const timelineEntry = findTimelineEntryForMapping(mapping);
+        if (timelineEntry) {
+          state.pendingTimelineNavigation = null;
+          navigateCurrentBrowserTab(
+            timelineEntry.href,
+            timelineEntry.title || mapping.courseName || UI_TEXT.defaultBrowserTitle
+          );
+        } else if (!state.dashboardLoaded || !state.timelineEntries.length) {
+          queueTimelineNavigationForMapping(mapping);
+          ensureDashboardLoaded();
+          scheduleDashboardTimelinePull();
+        } else if (mapping.courseUrl && activeTab?.kind === "browser" && isExplorerLinkedTab(activeTab) && activeTab.courseUrl !== mapping.courseUrl) {
+          navigateCurrentBrowserTab(mapping.courseUrl, mapping.courseName || UI_TEXT.defaultBrowserTitle);
+        }
+      } else if (mapping.courseUrl && activeTab?.kind === "browser" && isExplorerLinkedTab(activeTab) && activeTab.courseUrl !== mapping.courseUrl) {
         navigateCurrentBrowserTab(mapping.courseUrl, mapping.courseName || UI_TEXT.defaultBrowserTitle);
       }
       if (isExplorerLinkedTab(activeTab)) {
@@ -4325,7 +4527,7 @@ function wireEvents() {
       });
       return;
     }
-    await loadDirectory(mapping.submissionFolderPath, { syncBrowserFromDirectory: false });
+    await loadDirectory(mapping.submissionFolderPath, { syncBrowserFromDirectory: true });
   });
 
   elements.downloadDialog.addEventListener("click", (event) => {
@@ -4534,10 +4736,9 @@ window.fuzzyApi.onOpenPreviewFile((payload) => {
 });
 
 window.fuzzyApi.onShortcutInput((payload) => {
-  if (payload?.source === "main" && isEmbeddedBrowserFocused()) {
-    return;
-  }
-  const editable = Boolean(payload?.editable) || isEditableTarget(document.activeElement);
+  const editable = Boolean(payload?.editable) ||
+    Boolean(payload?.source === "main" && isEmbeddedBrowserFocused() && state.embeddedBrowserEditable) ||
+    isEditableTarget(document.activeElement);
   void handleShortcutInput(payload, { editable });
 });
 
