@@ -13,6 +13,7 @@ contextBridge.exposeInMainWorld("fuzzyApi", {
   saveMapping: (payload) => ipcRenderer.invoke("mapping:save", payload),
   createDefaultFolderMapping: (payload) => ipcRenderer.invoke("mapping:create-default-folder", payload),
   setSubmissionFolder: (payload) => ipcRenderer.invoke("mapping:set-submission-folder", payload),
+  removeMapping: (payload) => ipcRenderer.invoke("mapping:remove", payload),
   getSuggestions: (courseName) => ipcRenderer.invoke("mapping:suggestions", courseName),
   chooseFolderForMapping: () => ipcRenderer.invoke("mapping:choose-folder"),
   openCourseTabForFolder: (folderPath) => ipcRenderer.invoke("course:open-for-folder", folderPath),

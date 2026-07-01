@@ -194,6 +194,26 @@ class Store {
     return this.state.mappings[index];
   }
 
+  removeMapping(criteria = {}) {
+    const mapping = this.findMapping(criteria);
+    if (!mapping) {
+      return null;
+    }
+
+    const index = this.state.mappings.findIndex((entry) => (
+      entry.courseName === mapping.courseName &&
+      (entry.courseId || "") === (mapping.courseId || "") &&
+      (entry.courseUrl || "") === (mapping.courseUrl || "")
+    ));
+    if (index < 0) {
+      return null;
+    }
+
+    const [removed] = this.state.mappings.splice(index, 1);
+    this.save();
+    return removed;
+  }
+
   updateMappingPathsForRename(fromPath, toPath) {
     let changed = false;
 

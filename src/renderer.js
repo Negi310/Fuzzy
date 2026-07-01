@@ -3746,10 +3746,42 @@ function renderMappings() {
     const item = document.createElement("div");
     item.className = "mapping-item";
     item.title = `${mapping.courseName}\n${mapping.folderPath}`;
-    item.innerHTML = `
+    const details = document.createElement("div");
+    details.className = "mapping-item-details";
+    details.innerHTML = `
       <strong title="${escapeHtml(mapping.courseName)}">${escapeHtml(mapping.courseName)}</strong>
       <small title="${escapeHtml(mapping.folderPath)}">${escapeHtml(mapping.folderPath)}</small>
     `;
+    const removeButton = document.createElement("button");
+    removeButton.type = "button";
+    removeButton.className = "ghost-button mapping-remove-button";
+    removeButton.textContent = "消去";
+    removeButton.addEventListener("click", async () => {
+      const shouldRemove = window.confirm(`「${mapping.courseName}」の紐づけを消去しますか？`);
+      if (!shouldRemove) {
+        return;
+      }
+      try {
+        const result = await window.fuzzyApi.removeMapping({
+          courseName: mapping.courseName,
+          courseId: mapping.courseId || "",
+          courseUrl: mapping.courseUrl || "",
+        });
+        state.mappings = Array.isArray(result?.mappings) ? result.mappings : state.mappings.filter((entry) => (
+          normalizeCourseTitle(entry.courseName) !== normalizeCourseTitle(mapping.courseName)
+        ));
+        state.mappingPromptedCourses.delete(mapping.courseName);
+        if (state.pendingMappingCourse?.courseName && normalizeCourseTitle(state.pendingMappingCourse.courseName) === normalizeCourseTitle(mapping.courseName)) {
+          state.pendingMappingCourse = null;
+        }
+        renderMappings();
+        renderSubmissionFolderButton();
+        toast("コース紐づけを消去しました", "success");
+      } catch (error) {
+        toast(error.message, "error");
+      }
+    });
+    item.append(details, removeButton);
     elements.mappingList.appendChild(item);
   }
 }
