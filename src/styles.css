@@ -1153,6 +1153,22 @@ button {
   background: #ffffff;
 }
 
+.mapping-item {
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: start;
+  gap: 10px;
+}
+
+.mapping-item-details {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.mapping-remove-button {
+  white-space: nowrap;
+}
+
 .suggestion-item {
   text-align: left;
   cursor: pointer;

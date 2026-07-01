@@ -2765,6 +2765,21 @@ ipcMain.handle("mapping:set-submission-folder", (_event, payload) => {
   return mapping;
 });
 
+ipcMain.handle("mapping:remove", (_event, payload) => {
+  const mapping = store.removeMapping({
+    courseName: payload?.courseName || "",
+    courseId: payload?.courseId || extractCourseIdFromUrl(payload?.courseUrl || ""),
+    courseUrl: payload?.courseUrl || "",
+  });
+  if (!mapping) {
+    throw new Error("削除するコース紐づけが見つかりません");
+  }
+  return {
+    removed: mapping,
+    mappings: store.getState().mappings,
+  };
+});
+
 ipcMain.handle("course:open-for-folder", (_event, folderPath) => {
   const mapping = store.findMappingByPath(folderPath) || store.findMappingByFolder(folderPath);
   if (!mapping?.courseUrl) {
