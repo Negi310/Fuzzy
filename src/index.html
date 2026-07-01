@@ -18,6 +18,7 @@
             <div class="address-shell">
               <span class="address-icon" aria-hidden="true"></span>
               <input id="address-input" class="address-input" type="text" autocomplete="off" />
+              <button type="button" class="address-button" data-action="tutorial" data-icon="help" title="チュートリアル" aria-label="チュートリアル"></button>
               <button type="button" class="address-button" data-action="favorite" data-icon="favorite" title="お気に入り" aria-label="お気に入り"></button>
               <button type="button" class="address-button" data-action="menu" data-icon="settings" title="メニュー" aria-label="メニュー"></button>
             </div>
@@ -100,6 +101,16 @@
 
           <section class="settings-section">
             <div class="dialog-header compact">
+              <h2>AI サービス</h2>
+            </div>
+            <p class="dialog-help">Gemini、NotebookLM、ChatGPT のサインイン中に問題が出たときは、まとめてセッションを初期化してから再度ログインしてください。</p>
+            <div class="dialog-inline-actions">
+              <button id="reset-ai-session-button" type="button" class="secondary-button">セッション初期化</button>
+            </div>
+          </section>
+
+          <section class="settings-section">
+            <div class="dialog-header compact">
               <h2>更新</h2>
             </div>
             <div id="update-status-label" class="path-chip">起動後に更新状況を確認します</div>
@@ -138,6 +149,35 @@
             <button id="mapping-choose-folder" type="button" class="secondary-button">既存フォルダを選ぶ</button>
             <button value="cancel" class="ghost-button">閉じる</button>
           </menu>
+        </form>
+      </dialog>
+
+      <dialog id="tutorial-dialog" class="download-dialog tutorial-dialog">
+        <form method="dialog" class="download-form tutorial-form">
+          <div class="dialog-header">
+            <h2>チュートリアル</h2>
+            <button value="cancel" class="ghost-button">閉じる</button>
+          </div>
+
+          <section class="settings-section tutorial-section">
+            <h3>画面構成</h3>
+            <p class="dialog-help">上部はブラウザ、右側はエクスプローラーとタイムラインです。Moodle を見ながら資料整理や提出準備を進められます。</p>
+          </section>
+
+          <section class="settings-section tutorial-section">
+            <h3>基本操作</h3>
+            <p class="dialog-help">アドレス欄でページ移動、星マークでお気に入り、右側タブでエクスプローラーとタイムラインを切り替えます。歯車から設定を開けます。</p>
+          </section>
+
+          <section class="settings-section tutorial-section">
+            <h3>主な機能</h3>
+            <p class="dialog-help">コースとフォルダの紐づけ、提出フォルダへの移動、タイムラインから課題ページへの移動、ファイル整理、ドラッグアンドドロップに対応しています。</p>
+          </section>
+
+          <section class="settings-section tutorial-section">
+            <h3>困ったとき</h3>
+            <p class="dialog-help">設定から Moodle URL やコース紐づけを見直せます。紐づけを消去すると、次にコースを開いたときに再設定ダイアログが表示されます。</p>
+          </section>
         </form>
       </dialog>
 

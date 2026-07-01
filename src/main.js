@@ -32,6 +32,8 @@ const ALLOWED_HOST_PATTERNS = [
   /^([a-z0-9-]+\.)*google\.com$/i,
   /^([a-z0-9-]+\.)*gstatic\.com$/i,
   /^([a-z0-9-]+\.)*googleusercontent\.com$/i,
+  /^([a-z0-9-]+\.)*chatgpt\.com$/i,
+  /^([a-z0-9-]+\.)*openai\.com$/i,
   /^login\.microsoftonline\.com$/i,
   /^sts\.windows\.net$/i,
   /^aadcdn\.msauth\.net$/i,
@@ -458,6 +460,78 @@ function isGoogleWorkspaceUrl(targetUrl) {
   } catch (_error) {
     return false;
   }
+}
+
+function isGoogleSessionHost(hostname = "") {
+  return (
+    hostname === "google.com" ||
+    hostname.endsWith(".google.com") ||
+    hostname.endsWith(".gstatic.com") ||
+    hostname.endsWith(".googleusercontent.com") ||
+    hostname.endsWith(".googleapis.com")
+  );
+}
+
+function isOpenAiSessionHost(hostname = "") {
+  return (
+    hostname === "openai.com" ||
+    hostname.endsWith(".openai.com") ||
+    hostname === "chatgpt.com" ||
+    hostname.endsWith(".chatgpt.com") ||
+    hostname.endsWith(".oaistatic.com") ||
+    hostname.endsWith(".oaiusercontent.com")
+  );
+}
+
+async function resetAiSessions() {
+  if (!fuzzySession) {
+    return { clearedCookies: 0 };
+  }
+
+  const cookies = await fuzzySession.cookies.get({});
+  let clearedCookies = 0;
+  for (const cookie of cookies) {
+    const domain = String(cookie?.domain || "").replace(/^\./, "").toLowerCase();
+    if (!isGoogleSessionHost(domain) && !isOpenAiSessionHost(domain)) {
+      continue;
+    }
+    const protocol = cookie?.secure ? "https://" : "http://";
+    const cookiePath = String(cookie?.path || "/").startsWith("/") ? String(cookie?.path || "/") : `/${cookie?.path || ""}`;
+    const url = `${protocol}${domain}${cookiePath}`;
+    try {
+      await fuzzySession.cookies.remove(url, cookie.name);
+      clearedCookies += 1;
+    } catch (_error) {
+      // Ignore individual cookie removal failures and continue clearing.
+    }
+  }
+
+  await Promise.allSettled([
+    fuzzySession.clearStorageData({
+      origins: [
+        "https://accounts.google.com",
+        "https://notebooklm.google.com",
+        "https://gemini.google.com",
+        "https://chatgpt.com",
+        "https://auth.openai.com",
+        "https://platform.openai.com",
+      ],
+      storages: [
+        "cookies",
+        "filesystem",
+        "indexdb",
+        "localstorage",
+        "serviceworkers",
+        "cachestorage",
+        "shadercache",
+        "websql",
+      ],
+    }),
+    fuzzySession.flushStorageData(),
+    fuzzySession.cookies.flushStore(),
+  ]);
+
+  return { clearedCookies };
 }
 
 function isPdfUrl(targetUrl) {
@@ -2658,6 +2732,10 @@ ipcMain.handle("app:open-external", async (_event, targetUrl) => {
   }
   await shell.openExternal(normalizedUrl);
   return { ok: true };
+});
+
+ipcMain.handle("session:ai:reset", async () => {
+  return await resetAiSessions();
 });
 
 ipcMain.handle("state:get", async () => buildInitialState());

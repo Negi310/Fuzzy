@@ -21,6 +21,7 @@ const UI_TEXT = {
 
 const FAVORITE_LINKS = [
   { label: "Moodle", url: () => state.moodleHome, title: UI_TEXT.defaultBrowserTitle, explorerLinked: true },
+  { label: "ChatGPT", url: "https://chatgpt.com", title: "ChatGPT", explorerLinked: false },
   { label: "Gemini", url: "https://gemini.google.com/app", title: "Gemini", explorerLinked: false },
   { label: "NotebookLM", url: "https://notebooklm.google.com", title: "NotebookLM", explorerLinked: false },
 ];
@@ -108,6 +109,7 @@ const elements = {
   goRootFolderButton: document.querySelector("#go-root-folder-button"),
   rootDirLabel: document.querySelector("#root-dir-label"),
   moodleHomeInput: document.querySelector("#moodle-home-input"),
+  resetAiSessionButton: document.querySelector("#reset-ai-session-button"),
   saveMoodleHomeButton: document.querySelector("#save-moodle-home-button"),
   updateStatusLabel: document.querySelector("#update-status-label"),
   checkUpdatesButton: document.querySelector("#check-updates-button"),
@@ -125,6 +127,7 @@ const elements = {
   dockToggleButton: document.querySelector("#dock-toggle-button"),
   settingsDialog: document.querySelector("#settings-dialog"),
   mappingDialog: document.querySelector("#mapping-dialog"),
+  tutorialDialog: document.querySelector("#tutorial-dialog"),
   mappingCourseLabel: document.querySelector("#mapping-course-label"),
   mappingSuggestions: document.querySelector("#mapping-suggestions"),
   dashboardWebview: document.querySelector("#dashboard-webview"),
@@ -325,6 +328,59 @@ function setMoodleHome(nextUrl) {
   }
 }
 
+function getMoodleLoginUrl() {
+  try {
+    return new URL("./login/index.php", state.moodleHome).toString();
+  } catch (_error) {
+    return `${String(state.moodleHome || "").replace(/\/+$/, "")}/login/index.php`;
+  }
+}
+
+function isMoodleLoginUrl(targetUrl) {
+  try {
+    const parsed = new URL(targetUrl || "");
+    return /moodle(?:\d{4})?\.wakayama-u\.ac\.jp$/i.test(parsed.hostname)
+      && /\/login\/index(?:_form)?\.html$/i.test(parsed.pathname);
+  } catch (_error) {
+    return false;
+  }
+}
+
+async function tryAutoMoodleLogin(webviewLike) {
+  if (!webviewLike?.getURL || !webviewLike.executeJavaScript) {
+    return false;
+  }
+
+  const currentUrl = webviewLike.getURL?.() || "";
+  if (!isMoodleLoginUrl(currentUrl)) {
+    return false;
+  }
+
+  try {
+    return await webviewLike.executeJavaScript(`
+      (() => {
+        const target = [...document.querySelectorAll("button, a, input[type='button'], input[type='submit']")]
+          .find((element) => {
+            const text = String(
+              element.textContent
+              || element.value
+              || element.getAttribute("aria-label")
+              || ""
+            ).replace(/\\s+/g, " ").trim();
+            return text.includes("和歌山大学ID") && text.includes("ログイン");
+          });
+        if (!target) {
+          return false;
+        }
+        target.click();
+        return true;
+      })();
+    `, true);
+  } catch (_error) {
+    return false;
+  }
+}
+
 function shouldOpenInExternalBrowser(url) {
   try {
     const parsed = new URL(normalizeUrl(url));
@@ -339,6 +395,8 @@ function shouldOpenInExternalBrowser(url) {
       /^([a-z0-9-]+\.)*google\.com$/i,
       /^([a-z0-9-]+\.)*gstatic\.com$/i,
       /^([a-z0-9-]+\.)*googleusercontent\.com$/i,
+      /^([a-z0-9-]+\.)*chatgpt\.com$/i,
+      /^([a-z0-9-]+\.)*openai\.com$/i,
       /^login\.microsoftonline\.com$/i,
       /^sts\.windows\.net$/i,
       /^aadcdn\.msauth\.net$/i,
@@ -2856,6 +2914,7 @@ function mountBrowserLikeTab(tab, usePreload = true) {
 
   webview.addEventListener("did-finish-load", () => {
     syncTabFromWebview(tab);
+    void tryAutoMoodleLogin(webview);
     if (tab.id === state.activeTabId) {
       focusBrowserSurface(tab);
     }
@@ -2863,10 +2922,12 @@ function mountBrowserLikeTab(tab, usePreload = true) {
 
   webview.addEventListener("did-navigate", () => {
     syncTabFromWebview(tab);
+    void tryAutoMoodleLogin(webview);
   });
 
   webview.addEventListener("did-navigate-in-page", () => {
     syncTabFromWebview(tab);
+    void tryAutoMoodleLogin(webview);
   });
 
   webview.addEventListener("dom-ready", () => {
@@ -2876,6 +2937,7 @@ function mountBrowserLikeTab(tab, usePreload = true) {
       tabId: tab.id,
       webContentsId,
     });
+    void tryAutoMoodleLogin(webview);
     if (tab.id === state.activeTabId) {
       focusBrowserSurface(tab);
     }
@@ -4051,9 +4113,18 @@ async function showDownloadDialog(payload, tab, options = {}) {
 }
 
 function setupDashboardWebview() {
-  elements.dashboardWebview.addEventListener("did-finish-load", scheduleDashboardTimelinePull);
-  elements.dashboardWebview.addEventListener("did-navigate", scheduleDashboardTimelinePull);
-  elements.dashboardWebview.addEventListener("did-navigate-in-page", scheduleDashboardTimelinePull);
+  elements.dashboardWebview.addEventListener("did-finish-load", () => {
+    void tryAutoMoodleLogin(elements.dashboardWebview);
+    scheduleDashboardTimelinePull();
+  });
+  elements.dashboardWebview.addEventListener("did-navigate", () => {
+    void tryAutoMoodleLogin(elements.dashboardWebview);
+    scheduleDashboardTimelinePull();
+  });
+  elements.dashboardWebview.addEventListener("did-navigate-in-page", () => {
+    void tryAutoMoodleLogin(elements.dashboardWebview);
+    scheduleDashboardTimelinePull();
+  });
 }
 
 function absorbWheelEvent(event) {
@@ -4272,6 +4343,10 @@ function wireEvents() {
       toast("お気に入り機能はまだ未実装です", "info");
       return;
     }
+    if (action === "tutorial") {
+      elements.tutorialDialog?.showModal();
+      return;
+    }
     if (action === "menu") {
       void executeShortcutAction("openSettings");
       return;
@@ -4401,6 +4476,15 @@ function wireEvents() {
     }
   });
 
+  elements.resetAiSessionButton?.addEventListener("click", async () => {
+    try {
+      const result = await window.fuzzyApi.resetAiSessions();
+      toast(`Gemini / NotebookLM / ChatGPT セッションを初期化しました (${result?.clearedCookies ?? 0} cookies)`, "success");
+    } catch (error) {
+      toast(error.message, "error");
+    }
+  });
+
   elements.checkUpdatesButton?.addEventListener("click", async () => {
     try {
       const status = await window.fuzzyApi.checkForUpdates();
@@ -4490,6 +4574,7 @@ function wireEvents() {
   });
   bindDialogBackdropClose(elements.settingsDialog);
   bindDialogBackdropClose(elements.mappingDialog);
+  bindDialogBackdropClose(elements.tutorialDialog);
 
   elements.shortcutList?.addEventListener("click", (event) => {
     const input = event.target.closest("[data-shortcut-input]");
@@ -4714,7 +4799,7 @@ async function initialize() {
     ensureDashboardLoaded();
   }
 
-  createBrowserTab(state.moodleHome, UI_TEXT.defaultBrowserTitle);
+  createBrowserTab(getMoodleLoginUrl(), UI_TEXT.defaultBrowserTitle);
 }
 
 window.fuzzyApi.onAppUpdateEvent((payload) => {
