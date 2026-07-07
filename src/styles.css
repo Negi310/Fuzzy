@@ -501,16 +501,18 @@ button {
   display: flex;
   gap: 0;
   align-items: end;
-  padding: 6px 8px 0 0;
+  padding: 6px 8px 0 40px;
   border-bottom: 1px solid #dfe8f2;
   background: linear-gradient(180deg, #f5f8fb 0, #ffffff 100%);
+  position: relative;
+  overflow: visible;
 }
 
 .side-panel.hidden .side-panel-tabs {
   position: absolute;
   top: 0;
   right: 0;
-  gap: 0;
+  width: 0;
   padding: 6px 0 0;
   border-bottom: 0;
   background: transparent;
@@ -961,9 +963,12 @@ button {
 }
 
 .dock-toggle-button {
-  width: 18px;
-  height: 32px;
-  margin: 0 6px 0 0;
+  position: absolute;
+  top: 6px;
+  left: 0;
+  width: 24px;
+  height: 36px;
+  margin: 0;
   padding: 0;
   border: 1px solid #cbd8e6;
   border-right: 0;
@@ -972,18 +977,13 @@ button {
   box-shadow: 0 3px 10px rgba(19, 39, 67, 0.08);
   cursor: pointer;
   color: #4c5d76;
-  font-size: 11px;
+  font-size: 13px;
   font-weight: 600;
   line-height: 1;
   transition: width 150ms ease, background 140ms ease, border-color 140ms ease, box-shadow 140ms ease;
   display: grid;
   place-items: center;
-  flex: 0 0 auto;
-  align-self: stretch;
-}
-
-.side-panel.hidden .dock-toggle-button {
-  margin-right: 0;
+  z-index: 3;
 }
 
 .dock-toggle-button:hover {
@@ -1000,6 +1000,11 @@ button {
   background: #ffffff;
 }
 
+.side-panel.hidden .dock-toggle-button {
+  left: auto;
+  right: 100%;
+}
+
 .settings-dialog,
 .mapping-dialog,
 .download-dialog {
@@ -1007,6 +1012,26 @@ button {
   border: 1px solid #c8d6e6;
   padding: 0;
   color: #1d2b3f;
+}
+
+.overlay-dialog {
+  position: fixed;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: 12px;
+  background: rgba(16, 24, 40, 0.24);
+  z-index: 60;
+}
+
+.overlay-dialog.hidden {
+  display: none;
+}
+
+.overlay-dialog-panel {
+  margin: 0;
+  background: rgba(255, 255, 255, 0.98);
+  box-shadow: 0 18px 42px rgba(18, 39, 69, 0.24);
 }
 
 .context-menu-backdrop {
@@ -1315,10 +1340,11 @@ button {
     width: auto;
     height: 0;
     min-height: 0;
-    opacity: 0;
-    transform: translateY(10px);
+    opacity: 1;
+    transform: none;
+    overflow: visible;
+    pointer-events: auto;
   }
-
   #explorer-panel.active {
     grid-template-columns: minmax(280px, 1fr) minmax(240px, 0.72fr);
     grid-template-rows: minmax(0, 1fr);

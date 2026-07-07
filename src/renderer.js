@@ -75,6 +75,8 @@ const state = {
   copiedExplorerPaths: [],
   explorerClipboardMode: "",
   explorerUndoStack: [],
+  lastExplorerDeletionAt: 0,
+  submissionFolderDraft: null,
   downloadDraft: null,
   renameDraft: null,
   contextMenu: null,
@@ -148,6 +150,11 @@ const elements = {
   renameFileNameInput: document.querySelector("#rename-file-name"),
   renameCancelButton: document.querySelector("#rename-cancel-button"),
   renameSaveButton: document.querySelector("#rename-save-button"),
+  submissionFolderDialog: document.querySelector("#submission-folder-dialog"),
+  submissionFolderForm: document.querySelector("#submission-folder-form"),
+  submissionFolderNameInput: document.querySelector("#submission-folder-name"),
+  submissionFolderCancelButton: document.querySelector("#submission-folder-cancel-button"),
+  submissionFolderSaveButton: document.querySelector("#submission-folder-save-button"),
   contextMenuBackdrop: document.querySelector("#context-menu-backdrop"),
   contextMenu: document.querySelector("#context-menu"),
 };
@@ -1982,7 +1989,7 @@ function syncAddressBar() {
 }
 
 function focusBrowserSurface(tab) {
-  if (state.dialogFocusLock) {
+  if (state.dialogFocusLock || state.renameDraft) {
     return;
   }
   if (!tab?.webviewEl || tab.kind !== "browser") {
@@ -2698,6 +2705,8 @@ async function deleteExplorerEntries(entries) {
   }
 
   const result = await window.fuzzyApi.deleteExplorerEntriesWithUndo(uniqueEntries.map((entry) => entry.path));
+  state.lastExplorerDeletionAt = Date.now();
+  await window.fuzzyApi.focusWindow?.();
   pushExplorerUndoEntry({
     type: "delete",
     entries: result?.entries || [],
@@ -3182,7 +3191,17 @@ async function createExplorerEntry(parentPath, kind) {
   if ((state.currentDir || state.rootDir) === parentPath) {
     await loadDirectory(parentPath, { syncBrowserFromDirectory: false });
   }
-  toast(`${created.name} created`, "success");
+  if (created.kind === "folder") {
+    const renamed = showRenameDialogForPath(created.path);
+    toast(
+      renamed
+        ? `${created.name} を作成しました。続けて名前を変更できます`
+        : `${created.name} を作成しました`,
+      "success",
+    );
+    return;
+  }
+  toast(`${created.name} を作成しました`, "success");
 }
 
 async function openExplorerEntryWith(entry, program) {
@@ -3296,6 +3315,9 @@ function focusDialogInput(input, { select = false, selectFileStem = false } = {}
     return;
   }
   const tryFocus = () => {
+    if (input === elements.renameFileNameInput && !state.renameDraft) {
+      return;
+    }
     input.focus({ preventScroll: true });
     if (select) {
       if (selectFileStem) {
@@ -3306,12 +3328,34 @@ function focusDialogInput(input, { select = false, selectFileStem = false } = {}
     }
   };
   requestAnimationFrame(tryFocus);
-  setTimeout(tryFocus, 60);
-  setTimeout(tryFocus, 180);
+  [0, 60, 180].forEach((delay) => {
+    setTimeout(tryFocus, delay);
+  });
 }
 
 function setDialogFocusLock(locked) {
   state.dialogFocusLock = Boolean(locked);
+}
+
+function closeSubmissionFolderDialog() {
+  if (elements.submissionFolderDialog.classList.contains("hidden")) {
+    return;
+  }
+  elements.submissionFolderDialog.classList.add("hidden");
+  elements.submissionFolderDialog.setAttribute("aria-hidden", "true");
+  elements.submissionFolderNameInput.value = "";
+  state.submissionFolderDraft = null;
+}
+
+function openSubmissionFolderDialog(mapping, onComplete = null) {
+  state.submissionFolderDraft = {
+    mapping,
+    onComplete,
+  };
+  elements.submissionFolderNameInput.value = "提出フォルダ";
+  elements.submissionFolderDialog.classList.remove("hidden");
+  elements.submissionFolderDialog.setAttribute("aria-hidden", "false");
+  focusDialogInput(elements.submissionFolderNameInput, { select: true, selectFileStem: false });
 }
 
 function isImeComposing(event) {
@@ -3350,28 +3394,66 @@ async function duplicateExplorerEntry(entry) {
 }
 
 function showRenameDialog(entry, options = {}) {
-  state.renameDraft = {
-    ...entry,
-    openPathAfterSave: options.openPathAfterSave || "",
+  const openRenameDialog = async () => {
+    await window.fuzzyApi.focusWindow?.();
+    state.renameDraft = {
+      ...entry,
+      openPathAfterSave: options.openPathAfterSave || "",
+      pendingAutoSelect: true,
+      openedAt: Date.now(),
+    };
+    setDialogFocusLock(true);
+    if (document.activeElement instanceof HTMLElement) {
+      document.activeElement.blur();
+    }
+    elements.renameFileNameInput.value = entry.name;
+    elements.renameCurrentName.textContent = `現在の名前: ${entry.name}`;
+    elements.renameDialog.showModal();
+    void window.fuzzyApi.focusWindow?.().finally(() => {
+      focusDialogInput(elements.renameFileNameInput, { select: true, selectFileStem: true });
+      setTimeout(() => {
+        if (!state.renameDraft || document.activeElement !== elements.renameFileNameInput) {
+          return;
+        }
+        elements.renameFileNameInput.select();
+        elements.renameFileNameInput.setSelectionRange(0, getFileNameSelectionEnd(elements.renameFileNameInput.value));
+      }, 80);
+    });
   };
-  setDialogFocusLock(true);
-  elements.renameFileNameInput.value = entry.name;
-  elements.renameCurrentName.textContent = `現在の名前: ${entry.name}`;
-  elements.renameDialog.showModal();
-  focusDialogInput(elements.renameFileNameInput, { select: true, selectFileStem: true });
+
+  const deletionCooldownMs = 220;
+  const elapsedSinceDeletion = Date.now() - Number(state.lastExplorerDeletionAt || 0);
+  if (elapsedSinceDeletion >= 0 && elapsedSinceDeletion < deletionCooldownMs) {
+    setTimeout(openRenameDialog, deletionCooldownMs - elapsedSinceDeletion);
+    return;
+  }
+
+  openRenameDialog();
 }
 
-function showRenameDialogForPath(targetPath) {
+function showRenameDialogForPath(targetPath, options = {}) {
   if (!targetPath) {
     return false;
   }
   const entry = findExplorerEntryByPath(targetPath);
-  if (!entry) {
+  if (entry) {
+    setExplorerSelection([entry.path], entry.path);
+    renderExplorerSelectionState();
+    showRenameDialog(entry, options);
+    return true;
+  }
+
+  const normalizedPath = String(targetPath || "");
+  const name = normalizedPath.split(/[/\\]/).at(-1) || "";
+  if (!name) {
     return false;
   }
-  setExplorerSelection([entry.path], entry.path);
-  renderExplorerSelectionState();
-  showRenameDialog(entry);
+
+  showRenameDialog({
+    path: normalizedPath,
+    name,
+    isDirectory: true,
+  }, options);
   return true;
 }
 
@@ -3980,6 +4062,10 @@ function isWithinPath(targetPath, parentPath) {
   return normalizedTarget === normalizedParent || normalizedTarget.startsWith(`${normalizedParent}\\`);
 }
 
+function isSamePath(leftPath, rightPath) {
+  return String(leftPath || "").toLowerCase() === String(rightPath || "").toLowerCase();
+}
+
 function getActiveCourseMapping() {
   return findMappingForTab(getActiveTab()) || findMappingForPath(state.currentDir) || null;
 }
@@ -3993,6 +4079,42 @@ function renderSubmissionFolderButton() {
   const viewingSubmission = isViewingSubmissionFolder(mapping);
   elements.openSubmissionFolderButton.textContent = viewingSubmission ? "コースフォルダを開く" : "提出フォルダを開く";
   elements.openSubmissionFolderButton.disabled = false;
+}
+
+function mergeUpdatedMapping(next) {
+  const index = state.mappings.findIndex((entry) => (
+    entry.courseName === next.courseName &&
+    (entry.courseId || "") === (next.courseId || "") &&
+    (entry.courseUrl || "") === (next.courseUrl || "")
+  ));
+  if (index >= 0) {
+    state.mappings[index] = next;
+  } else {
+    state.mappings.push(next);
+  }
+  renderMappings();
+  renderSubmissionFolderButton();
+}
+
+async function ensureSubmissionFolderMappingIsValid(mapping) {
+  if (!mapping?.submissionFolderPath) {
+    return mapping;
+  }
+
+  const directory = await window.fuzzyApi.listDirectory(mapping.submissionFolderPath);
+  if (isSamePath(directory?.currentDir, mapping.submissionFolderPath)) {
+    return mapping;
+  }
+
+  const next = await window.fuzzyApi.setSubmissionFolder({
+    courseName: mapping.courseName,
+    courseId: mapping.courseId,
+    courseUrl: mapping.courseUrl,
+    submissionFolderPath: "",
+  });
+  mergeUpdatedMapping(next);
+  toast("提出フォルダが見つからなかったため設定を解除しました", "warn");
+  return next;
 }
 
 async function saveRemoteFile(payload, tab, overrides = {}) {
@@ -4027,24 +4149,7 @@ async function configureSubmissionFolder(mapping, onComplete = null, menuPositio
     {
       label: "新しく提出フォルダを作成",
       action: async () => {
-        const submissionFolderPath = `${mapping.folderPath}\\提出フォルダ`;
-        const next = await window.fuzzyApi.setSubmissionFolder({
-          courseName: mapping.courseName,
-          courseId: mapping.courseId,
-          courseUrl: mapping.courseUrl,
-          submissionFolderPath,
-        });
-        const index = state.mappings.findIndex((entry) => entry.courseName === next.courseName);
-        if (index >= 0) {
-          state.mappings[index] = next;
-        }
-        renderMappings();
-        renderSubmissionFolderButton();
-        await loadDirectory(next.submissionFolderPath, { syncBrowserFromDirectory: false });
-        if (onComplete) {
-          await onComplete(next);
-        }
-        toast("提出フォルダを作成しました", "success");
+        openSubmissionFolderDialog(mapping, onComplete);
       },
     },
     {
@@ -4060,12 +4165,7 @@ async function configureSubmissionFolder(mapping, onComplete = null, menuPositio
           courseUrl: mapping.courseUrl,
           submissionFolderPath,
         });
-        const index = state.mappings.findIndex((entry) => entry.courseName === next.courseName);
-        if (index >= 0) {
-          state.mappings[index] = next;
-        }
-        renderMappings();
-        renderSubmissionFolderButton();
+        mergeUpdatedMapping(next);
         await loadDirectory(next.submissionFolderPath, { syncBrowserFromDirectory: false });
         if (onComplete) {
           await onComplete(next);
@@ -4637,6 +4737,7 @@ function wireEvents() {
       await loadDirectory(mapping.folderPath, { syncBrowserFromDirectory: false });
       return;
     }
+    mapping = await ensureSubmissionFolderMappingIsValid(mapping);
     if (!mapping.submissionFolderPath) {
       await configureSubmissionFolder(mapping, null, {
         x: event.clientX,
@@ -4756,13 +4857,90 @@ function wireEvents() {
     elements.renameCurrentName.textContent = "";
     elements.renameFileNameInput.value = "";
   });
+  elements.renameFileNameInput.addEventListener("focus", () => {
+    if (!state.renameDraft?.pendingAutoSelect) {
+      return;
+    }
+    state.renameDraft.pendingAutoSelect = false;
+    setTimeout(() => {
+      if (document.activeElement !== elements.renameFileNameInput) {
+        return;
+      }
+      elements.renameFileNameInput.setSelectionRange(0, getFileNameSelectionEnd(elements.renameFileNameInput.value));
+    }, 20);
+    requestAnimationFrame(() => {
+      if (document.activeElement !== elements.renameFileNameInput) {
+        return;
+      }
+      elements.renameFileNameInput.setSelectionRange(0, getFileNameSelectionEnd(elements.renameFileNameInput.value));
+    });
+  });
+  elements.renameFileNameInput.addEventListener("pointerdown", (event) => {
+    if (!state.renameDraft) {
+      return;
+    }
+    event.stopPropagation();
+  });
+  elements.renameFileNameInput.addEventListener("mouseup", () => {
+    if (!state.renameDraft) {
+      return;
+    }
+    if (document.activeElement !== elements.renameFileNameInput) {
+      focusDialogInput(elements.renameFileNameInput, { select: true, selectFileStem: true });
+    }
+  });
   elements.renameDialog.addEventListener("click", (event) => {
     if (event.target === elements.renameDialog) {
       elements.renameDialog.close();
     }
   });
+  elements.submissionFolderSaveButton.addEventListener("click", async () => {
+    const draft = state.submissionFolderDraft;
+    if (!draft?.mapping) {
+      closeSubmissionFolderDialog();
+      return;
+    }
+    const submissionFolderName = elements.submissionFolderNameInput.value.trim();
+    if (!submissionFolderName) {
+      toast("提出フォルダ名を入力してください", "warn");
+      focusDialogInput(elements.submissionFolderNameInput, { select: true, selectFileStem: false });
+      return;
+    }
+    const submissionFolderPath = `${draft.mapping.folderPath}\\${submissionFolderName}`;
+    const next = await window.fuzzyApi.setSubmissionFolder({
+      courseName: draft.mapping.courseName,
+      courseId: draft.mapping.courseId,
+      courseUrl: draft.mapping.courseUrl,
+      submissionFolderPath,
+    });
+    mergeUpdatedMapping(next);
+    closeSubmissionFolderDialog();
+    await loadDirectory(draft.mapping.folderPath, { syncBrowserFromDirectory: false });
+    if (draft.onComplete) {
+      await draft.onComplete(next);
+    }
+    toast("提出フォルダを作成しました", "success");
+  });
+  elements.submissionFolderCancelButton.addEventListener("click", () => {
+    closeSubmissionFolderDialog();
+  });
+  elements.submissionFolderForm.addEventListener("submit", (event) => {
+    event.preventDefault();
+  });
+  elements.submissionFolderDialog.addEventListener("click", (event) => {
+    if (event.target === elements.submissionFolderDialog) {
+      closeSubmissionFolderDialog();
+    }
+  });
+  elements.submissionFolderDialog.addEventListener("keydown", (event) => {
+    if (event.key === "Escape") {
+      event.preventDefault();
+      closeSubmissionFolderDialog();
+    }
+  });
   registerDialogTextInput(elements.downloadFileNameInput, () => elements.downloadSaveButton.click());
   registerDialogTextInput(elements.renameFileNameInput, () => elements.renameSaveButton.click());
+  registerDialogTextInput(elements.submissionFolderNameInput, () => elements.submissionFolderSaveButton.click());
 
   window.addEventListener("resize", hideContextMenu);
   window.addEventListener("resize", renderBrowserLayout);

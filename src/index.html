@@ -227,6 +227,25 @@
         </form>
       </dialog>
 
+      <div id="submission-folder-dialog" class="overlay-dialog hidden" role="dialog" aria-modal="true" aria-hidden="true" tabindex="-1">
+        <form id="submission-folder-form" class="download-dialog download-form overlay-dialog-panel">
+          <div class="dialog-header">
+            <h2>提出フォルダを作成</h2>
+          </div>
+
+          <section class="settings-section">
+            <p class="dialog-help">作成する提出フォルダ名を入力してください。</p>
+            <label class="setting-label" for="submission-folder-name">フォルダ名</label>
+            <input id="submission-folder-name" class="dialog-input" type="text" />
+          </section>
+
+          <menu class="dialog-actions">
+            <button id="submission-folder-cancel-button" type="button" class="ghost-button">閉じる</button>
+            <button id="submission-folder-save-button" type="button" class="secondary-button">作成する</button>
+          </menu>
+        </form>
+      </div>
+
       <div id="context-menu-backdrop" class="context-menu-backdrop hidden" aria-hidden="true"></div>
       <div id="context-menu" class="context-menu hidden" role="menu" aria-hidden="true"></div>
       <webview id="dashboard-webview" class="dashboard-webview" partition="persist:fuzitter"></webview>

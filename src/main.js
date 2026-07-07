@@ -178,6 +178,37 @@ function getAutoUpdateStatus() {
   };
 }
 
+function focusMainWindow() {
+  if (!mainWindow || mainWindow.isDestroyed()) {
+    return { ok: false, focused: false };
+  }
+
+  if (mainWindow.isMinimized()) {
+    mainWindow.restore();
+  }
+
+  mainWindow.show();
+  mainWindow.moveTop?.();
+  mainWindow.focus();
+  mainWindow.webContents?.focus();
+
+  if (!mainWindow.isFocused()) {
+    mainWindow.setAlwaysOnTop(true);
+    mainWindow.focus();
+    mainWindow.webContents?.focus();
+    setTimeout(() => {
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.setAlwaysOnTop(false);
+      }
+    }, 120);
+  }
+
+  return {
+    ok: true,
+    focused: mainWindow.isFocused(),
+  };
+}
+
 function emitAutoUpdateEvent(payload = {}) {
   sendToRenderer("app:update:event", {
     ...getAutoUpdateStatus(),
@@ -2705,6 +2736,8 @@ ipcMain.handle("app:preferences:update", (_event, payload) => {
   };
 });
 
+ipcMain.handle("app:focus-window", () => focusMainWindow());
+
 ipcMain.handle("app:update:check", async () => {
   return triggerAutoUpdateCheck("manual");
 });
@@ -2828,15 +2861,18 @@ ipcMain.handle("mapping:create-default-folder", (_event, payload) => {
 
 ipcMain.handle("mapping:set-submission-folder", (_event, payload) => {
   const rootDir = getRootDir();
-  if (!payload?.submissionFolderPath || !isSubPath(rootDir, payload.submissionFolderPath)) {
+  const submissionFolderPath = String(payload?.submissionFolderPath || "");
+  if (submissionFolderPath && !isSubPath(rootDir, submissionFolderPath)) {
     throw new Error("提出フォルダはルートフォルダ配下である必要があります。");
   }
-  ensureDirectory(payload.submissionFolderPath);
+  if (submissionFolderPath) {
+    ensureDirectory(submissionFolderPath);
+  }
   const mapping = store.setSubmissionFolder({
     courseName: payload.courseName || "",
     courseId: payload.courseId || extractCourseIdFromUrl(payload.courseUrl),
     courseUrl: payload.courseUrl || "",
-  }, payload.submissionFolderPath);
+  }, submissionFolderPath);
   if (!mapping) {
     throw new Error("先にコースフォルダを紐づけてください。");
   }
