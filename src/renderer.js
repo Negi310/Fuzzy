@@ -1037,11 +1037,22 @@ function primeBrowserUploadDropzones() {
     if (!tab.contentEl?.classList.contains("visible")) {
       continue;
     }
-    if (getUploadSupportForTab(tab)?.kind !== "moodle") {
+    if (!getUploadSupportForTab(tab)) {
       continue;
     }
     void refreshBrowserUploadDropzone(tab);
   }
+}
+
+function shouldHandleBrowserUploadDrop(tab, clientX, clientY) {
+  const support = getUploadSupportForTab(tab);
+  if (!support) {
+    return false;
+  }
+  if (support.kind === "moodle") {
+    return isPointInsideBrowserUploadDropzone(tab, clientX, clientY);
+  }
+  return true;
 }
 
 function installRendererDragDebug() {
@@ -1061,10 +1072,7 @@ function installBrowserUploadBridge() {
       return;
     }
     const tab = getTabById(state.browserUploadDropTabId) || getActiveTab();
-    if (!tab || getUploadSupportForTab(tab)?.kind !== "moodle") {
-      return;
-    }
-    if (!isPointInsideBrowserUploadDropzone(tab, event.clientX, event.clientY)) {
+    if (!tab || !shouldHandleBrowserUploadDrop(tab, event.clientX, event.clientY)) {
       return;
     }
     event.preventDefault();
@@ -1077,10 +1085,7 @@ function installBrowserUploadBridge() {
       return;
     }
     const tab = getTabById(state.browserUploadDropTabId) || getActiveTab();
-    if (!tab || getUploadSupportForTab(tab)?.kind !== "moodle") {
-      return;
-    }
-    if (!isPointInsideBrowserUploadDropzone(tab, event.clientX, event.clientY)) {
+    if (!tab || !shouldHandleBrowserUploadDrop(tab, event.clientX, event.clientY)) {
       return;
     }
     event.preventDefault();
