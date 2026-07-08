@@ -1,8 +1,12 @@
 *.pdf
 node_modules/
 local-dist/
+.codex-temp/
+docs/build/
+npm
 dist/win-unpacked/
 dist/builder-debug.yml
 dist/latest.yml
+dist/*-Setup-*.zip
 dist/*-Setup-*.exe
 dist/*.blockmap

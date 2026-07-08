@@ -1852,6 +1852,9 @@ function getUploadKindForUrl(targetUrl = "") {
     if (hostname === "notebooklm.google.com") {
       return "notebooklm";
     }
+    if (hostname === "chatgpt.com" || hostname.endsWith(".chatgpt.com")) {
+      return "chatgpt";
+    }
   } catch (_error) {
     // Ignore invalid URLs.
   }
@@ -1977,6 +1980,51 @@ async function findUploadInputNodeId(targetContents, uploadKind) {
         if (owner?.querySelector?.(".dndupload-message")) {
           score += 180;
         }
+        if (${JSON.stringify(uploadKind)} === "chatgpt") {
+          const chatOwner = candidate.closest?.(
+            "form, [data-testid*='composer'], [data-testid*='message-composer'], [class*='composer'], [class*='attach'], [class*='upload'], main"
+          );
+          const promptRoot = candidate.closest?.(
+            "form:has(textarea), form:has([contenteditable='true']), [data-testid*='composer']:has(textarea), [data-testid*='composer']:has([contenteditable='true'])"
+          );
+          const labels = [
+            candidate.getAttribute("aria-label") || "",
+            candidate.getAttribute("title") || "",
+            candidate.getAttribute("accept") || "",
+            candidate.id || "",
+            candidate.name || "",
+            candidate.className || "",
+            candidate.getAttribute("data-testid") || "",
+            chatOwner?.className || "",
+            chatOwner?.getAttribute?.("data-testid") || "",
+            promptRoot?.className || "",
+            promptRoot?.getAttribute?.("data-testid") || "",
+          ].join(" ").toLowerCase();
+          if (chatOwner) {
+            score += 420;
+          }
+          if (promptRoot) {
+            score += 500;
+          }
+          if (candidate.multiple) {
+            score += 90;
+          }
+          const nearbyAttachButton = promptRoot?.querySelector?.(
+            "button[aria-label*='Attach'], button[aria-label*='attach'], button[aria-label*='Upload'], button[aria-label*='upload'], [data-testid*='attach'], [data-testid*='upload']"
+          );
+          if (nearbyAttachButton) {
+            score += 200;
+          }
+          if (labels.includes("composer") || labels.includes("message")) {
+            score += 220;
+          }
+          if (labels.includes("attach") || labels.includes("upload") || labels.includes("file")) {
+            score += 260;
+          }
+          if (labels.includes("image") || labels.includes("pdf") || labels.includes("audio")) {
+            score += 80;
+          }
+        }
         return score;
       };
 
@@ -2046,11 +2094,27 @@ async function findUploadInputNodeId(targetContents, uploadKind) {
         await clickByLabel(["upload files", "upload from computer", "ファイルをアップロード", "ファイルを追加", "パソコンからアップロード", "写真を追加"]);
       };
 
+      const clickChatGptFallback = async () => {
+        await clickByLabel(["attach", "upload", "file", "plus", "paperclip"]);
+        await clickByLabel(["attach files", "upload files", "add photos and files", "choose files"]);
+      };
+
       const collectInputs = (includeHidden = false) => frameDocs()
         .flatMap((doc) => walk(doc, includeHidden, []));
       const diagnostics = () => {
         const docs = frameDocs();
         const buttons = docs.flatMap((doc) => [...doc.querySelectorAll("button, [role='button'], .fp-btn-add")]);
+        const fileInputs = collectInputs(true)
+          .slice(0, 8)
+          .map((input) => ({
+            aria: input.getAttribute("aria-label") || "",
+            title: input.getAttribute("title") || "",
+            id: input.id || "",
+            name: input.name || "",
+            testid: input.getAttribute("data-testid") || "",
+            accept: input.getAttribute("accept") || "",
+            className: String(input.className || "").slice(0, 120),
+          }));
         const buttonLabels = buttons
           .map((button) => (
             button.getAttribute?.("aria-label") ||
@@ -2066,6 +2130,7 @@ async function findUploadInputNodeId(targetContents, uploadKind) {
           frameCount: Math.max(docs.length - 1, 0),
           visibleInputCount: collectInputs(false).length,
           hiddenInputCount: collectInputs(true).length,
+          fileInputs,
           buttonCount: buttons.length,
           buttonLabels,
         };
@@ -2113,6 +2178,21 @@ async function findUploadInputNodeId(targetContents, uploadKind) {
             "button[aria-label*='upload']",
             "button[title*='Upload']",
           ]);
+        } else if (${JSON.stringify(uploadKind)} === "chatgpt") {
+          await clickSelectors([
+            "button[aria-label*='Attach']",
+            "button[aria-label*='attach']",
+            "button[aria-label*='Upload']",
+            "button[aria-label*='upload']",
+            "button[aria-label*='Add photos and files']",
+            "button[aria-label*='files']",
+            "button[title*='Attach']",
+            "button[title*='Upload']",
+            "[data-testid*='upload']",
+            "[data-testid*='attach']",
+            "label[for][role='button']",
+          ]);
+          await clickChatGptFallback();
         }
 
         input = pickBestInput();
@@ -2278,6 +2358,7 @@ async function uploadFilesToTab(tabId, filePaths = [], tabUrl = "") {
           return rect.width > 0 && rect.height > 0;
         };
         const normalize = (value) => String(value || "").replace(/\s+/g, " ").trim().toLowerCase();
+        const fileNames = ${JSON.stringify(resolvedPaths.map((filePath) => path.basename(filePath)))};
         const clickMatching = (root, selectors, labels = []) => {
           const candidates = [...root.querySelectorAll(selectors.join(", "))];
           for (const candidate of candidates) {
@@ -2323,10 +2404,12 @@ async function uploadFilesToTab(tabId, filePaths = [], tabUrl = "") {
           return { finalized: false, submitted: false };
         }
 
-        input.dispatchEvent(new Event("input", { bubbles: true }));
-        input.dispatchEvent(new Event("change", { bubbles: true }));
+        input.dispatchEvent(new Event("input", { bubbles: true, composed: true }));
+        input.dispatchEvent(new Event("change", { bubbles: true, composed: true }));
+        input.dispatchEvent(new InputEvent("input", { bubbles: true, composed: true, inputType: "insertFromDrop", data: null }));
 
         let submitted = false;
+        let attached = false;
         if (${JSON.stringify(uploadKind)} === "moodle") {
           const localRoot = input.closest(".moodle-dialogue, .filepicker, .filemanager, .fp-formset, form") || document;
           const selectors = [
@@ -2361,10 +2444,32 @@ async function uploadFilesToTab(tabId, filePaths = [], tabUrl = "") {
             }
             await delay(80);
           }
+        } else if (${JSON.stringify(uploadKind)} === "chatgpt") {
+          const roots = [
+            input.closest("form"),
+            input.closest("[data-testid*='composer']"),
+            input.closest("[data-testid*='message-composer']"),
+            input.closest("[class*='composer']"),
+            document,
+          ].filter(Boolean);
+          for (const root of roots) {
+            root.dispatchEvent?.(new Event("input", { bubbles: true, composed: true }));
+            root.dispatchEvent?.(new Event("change", { bubbles: true, composed: true }));
+          }
+          for (let attempt = 0; attempt < 20; attempt += 1) {
+            const pageText = normalize(document.body?.textContent || "");
+            const attachedNames = fileNames.filter((name) => pageText.includes(normalize(name)));
+            const chips = document.querySelectorAll("[data-testid*='attachment'], [data-testid*='upload'], [aria-label*='attachment'], [aria-label*='uploaded']");
+            if (attachedNames.length || chips.length) {
+              attached = true;
+              break;
+            }
+            await delay(120);
+          }
         }
 
         input.removeAttribute("data-fuzitter-upload-target");
-        return { finalized: true, submitted };
+        return { finalized: true, submitted, attached };
       })();
     `, true);
 
@@ -2372,6 +2477,7 @@ async function uploadFilesToTab(tabId, filePaths = [], tabUrl = "") {
       ok: true,
       count: resolvedPaths.length,
       uploadKind,
+      attached: Boolean(uploadResult?.attached),
       submitted: Boolean(uploadResult?.submitted),
     };
   } finally {

@@ -801,6 +801,9 @@ function getUploadSupportForTab(tab) {
     if (hostname === "notebooklm.google.com") {
       return { kind: "notebooklm", label: "NotebookLM" };
     }
+    if (hostname === "chatgpt.com" || hostname.endsWith(".chatgpt.com")) {
+      return { kind: "chatgpt", label: "ChatGPT" };
+    }
   } catch (_error) {
     return null;
   }
@@ -1087,7 +1090,10 @@ function installBrowserUploadBridge() {
     toast(`[UPLOAD] start paths=${draggedPaths.length}`, "info");
     try {
       const result = await uploadDraggedFilesToTab(tab, draggedPaths);
-      toast(`[UPLOAD] ok count=${result?.count || draggedPaths.length} submitted=${result?.submitted ? "yes" : "no"}`, "success");
+      toast(
+        `[UPLOAD] ok count=${result?.count || draggedPaths.length} submitted=${result?.submitted ? "yes" : "no"} attached=${result?.attached ? "yes" : "no"}`,
+        result?.uploadKind === "chatgpt" && result?.attached === false ? "warn" : "success"
+      );
     } catch (error) {
       toast(`[UPLOAD] error ${error.message}`.slice(0, 200), "error");
     } finally {
