@@ -7,6 +7,9 @@ const PRELOAD_PATH = (() => {
   return pathname;
 })();
 
+const TUTORIAL_PDF_PATH = PRELOAD_PATH
+  .replace(/[\\\/]src[\\\/]browser-preload\.js$/i, "\\assets\\tutorial\\fuzitter-tutorial.pdf");
+
 const WEBVIEW_PARTITION = "persist:fuzitter";
 
 const UI_TEXT = {
@@ -24,6 +27,7 @@ const FAVORITE_LINKS = [
   { label: "ChatGPT", url: "https://chatgpt.com", title: "ChatGPT", explorerLinked: false },
   { label: "Gemini", url: "https://gemini.google.com/app", title: "Gemini", explorerLinked: false },
   { label: "NotebookLM", url: "https://notebooklm.google.com", title: "NotebookLM", explorerLinked: false },
+  { label: "アンケートフォーム", url: "https://forms.gle/Hm8wj5qy83p3DGiF9", title: "アンケートフォーム", explorerLinked: false },
 ];
 
 const SHORTCUT_ACTIONS = [
@@ -90,12 +94,15 @@ const state = {
     currentVersion: "",
     message: "",
   },
+  onboardingCompleted: false,
   keyBindings: {},
   shortcutRecordingActionId: "",
   lastShortcutSignature: "",
   lastShortcutAt: 0,
   dialogFocusLock: false,
   embeddedBrowserEditable: false,
+  browserUploadInFlight: false,
+  browserUploadSignature: "",
 };
 
 const elements = {
@@ -129,7 +136,11 @@ const elements = {
   dockToggleButton: document.querySelector("#dock-toggle-button"),
   settingsDialog: document.querySelector("#settings-dialog"),
   mappingDialog: document.querySelector("#mapping-dialog"),
-  tutorialDialog: document.querySelector("#tutorial-dialog"),
+  onboardingDialog: document.querySelector("#onboarding-dialog"),
+  onboardingMoodleHomeInput: document.querySelector("#onboarding-moodle-home-input"),
+  onboardingRootDirLabel: document.querySelector("#onboarding-root-dir-label"),
+  onboardingChooseRootButton: document.querySelector("#onboarding-choose-root-button"),
+  onboardingCompleteButton: document.querySelector("#onboarding-complete-button"),
   mappingCourseLabel: document.querySelector("#mapping-course-label"),
   mappingSuggestions: document.querySelector("#mapping-suggestions"),
   dashboardWebview: document.querySelector("#dashboard-webview"),
@@ -848,6 +859,7 @@ function clearBrowserUploadDropState() {
   }
   state.browserUploadDropTabId = "";
   state.browserUploadArmed = false;
+  state.browserUploadSignature = "";
   elements.browserContent.querySelectorAll(".browser-upload-dropzone").forEach((overlay) => {
     overlay.classList.remove("active");
   });
@@ -1071,6 +1083,9 @@ function installBrowserUploadBridge() {
     if (!state.browserUploadArmed || !state.pendingBrowserUploadPaths.length) {
       return;
     }
+    if (event.target instanceof Element && event.target.closest(".browser-surface")) {
+      return;
+    }
     const tab = getTabById(state.browserUploadDropTabId) || getActiveTab();
     if (!tab || !shouldHandleBrowserUploadDrop(tab, event.clientX, event.clientY)) {
       return;
@@ -1084,17 +1099,24 @@ function installBrowserUploadBridge() {
     if (!state.browserUploadArmed || !state.pendingBrowserUploadPaths.length) {
       return;
     }
+    if (event.target instanceof Element && event.target.closest(".browser-surface")) {
+      return;
+    }
     const tab = getTabById(state.browserUploadDropTabId) || getActiveTab();
     if (!tab || !shouldHandleBrowserUploadDrop(tab, event.clientX, event.clientY)) {
       return;
     }
     event.preventDefault();
     event.stopPropagation();
+    event.stopImmediatePropagation?.();
 
     const draggedPaths = [...state.pendingBrowserUploadPaths];
     toast(`[UPLOAD] start paths=${draggedPaths.length}`, "info");
     try {
       const result = await uploadDraggedFilesToTab(tab, draggedPaths);
+      if (result?.deduped) {
+        return;
+      }
       toast(
         `[UPLOAD] ok count=${result?.count || draggedPaths.length} submitted=${result?.submitted ? "yes" : "no"} attached=${result?.attached ? "yes" : "no"}`,
         result?.uploadKind === "chatgpt" && result?.attached === false ? "warn" : "success"
@@ -1244,11 +1266,33 @@ async function uploadDraggedFilesToTab(tab, sourcePaths = null) {
     throw new Error("アップロードできるファイルを選択してください。フォルダは対象外です。");
   }
 
-  return await window.fuzzyApi.uploadFilesToTab({
-    tabId: tab.id,
-    tabUrl: tab.url,
-    filePaths: fileEntries.map((entry) => entry.path),
-  });
+  const signature = [
+    tab.id,
+    support.kind,
+    ...fileEntries.map((entry) => `${entry.path}:${entry.modifiedAt || ""}:${entry.size || ""}`),
+  ].join("|");
+  if (state.browserUploadInFlight && state.browserUploadSignature === signature) {
+    return {
+      ok: true,
+      count: fileEntries.length,
+      uploadKind: support.kind,
+      attached: false,
+      submitted: false,
+      deduped: true,
+    };
+  }
+
+  state.browserUploadInFlight = true;
+  state.browserUploadSignature = signature;
+  try {
+    return await window.fuzzyApi.uploadFilesToTab({
+      tabId: tab.id,
+      tabUrl: tab.url,
+      filePaths: fileEntries.map((entry) => entry.path),
+    });
+  } finally {
+    state.browserUploadInFlight = false;
+  }
 }
 
 function bindBrowserUploadDropTarget(target, tab) {
@@ -1887,6 +1931,30 @@ function openFavoriteLink(index) {
   const url = typeof entry.url === "function" ? entry.url() : entry.url;
   createBrowserTab(url, entry.title, { explorerLinked: entry.explorerLinked });
   return true;
+}
+
+function getOnboardingRootDirText() {
+  return state.rootDir || UI_TEXT.rootUnset;
+}
+
+function canCompleteOnboarding() {
+  return Boolean(
+    String(elements.onboardingMoodleHomeInput?.value || "").trim() &&
+    state.rootDir
+  );
+}
+
+function refreshOnboardingState() {
+  if (elements.onboardingRootDirLabel) {
+    elements.onboardingRootDirLabel.textContent = getOnboardingRootDirText();
+  }
+  if (elements.onboardingCompleteButton) {
+    elements.onboardingCompleteButton.disabled = !canCompleteOnboarding();
+  }
+}
+
+function openTutorialPdf() {
+  createLocalPdfTab(TUTORIAL_PDF_PATH, "Fuzitter チュートリアル");
 }
 
 async function refreshActivePanel() {
@@ -2688,6 +2756,10 @@ function shouldUseNativeExternalFileDrag(entry) {
   return true;
 }
 
+function shouldUseManagedBrowserUploadDrag() {
+  return Boolean(getUploadSupportForTab(getActiveTab()));
+}
+
 function copySelectedExplorerEntries() {
   const entries = getSelectedExplorerEntries().filter((entry) => entry && entry.path);
   if (!entries.length) {
@@ -2726,6 +2798,7 @@ async function deleteExplorerEntries(entries) {
 
   setExplorerSelection([], "");
   await loadDirectory(state.currentDir || state.rootDir, { syncBrowserFromDirectory: false });
+  focusBrowserSurface(getActiveTab());
   toast(
     uniqueEntries.length === 1
       ? `${uniqueEntries[0].name} を削除しました`
@@ -3064,7 +3137,11 @@ function mountBrowserLikeTab(tab, usePreload = true) {
 
   tab.webviewEl = webview;
   tab.contentEl = contentEl;
+  tab.uploadOverlayEl = uploadOverlay;
+  bindBrowserUploadDropTarget(uploadOverlay, tab);
+  bindBrowserUploadDropTarget(contentEl, tab);
   contentEl.appendChild(webview);
+  contentEl.appendChild(uploadOverlay);
   elements.browserContent.appendChild(contentEl);
 
   renderBrowserLayout();
@@ -3861,10 +3938,16 @@ function renderDirectory(entries) {
         setExplorerSelection([entry.path], entry.path);
         renderExplorerSelectionState();
       }
-      const useNativeExternalDrag = shouldUseNativeExternalFileDrag(entry);
+      const useManagedBrowserUpload = shouldUseManagedBrowserUploadDrag();
+      const useNativeExternalDrag = !useManagedBrowserUpload && shouldUseNativeExternalFileDrag(entry);
       state.draggedExplorerPaths = state.selectedExplorerPaths.has(entry.path)
         ? [...state.selectedExplorerPaths]
         : [entry.path];
+      state.pendingBrowserUploadPaths = [...state.draggedExplorerPaths];
+      state.browserUploadArmed = true;
+      scheduleBrowserUploadReset();
+      primeBrowserUploadDropzones();
+      syncBrowserUploadDropState(state.activeTabId || "");
       if (useNativeExternalDrag) {
         event.preventDefault();
       }
@@ -3880,6 +3963,7 @@ function renderDirectory(entries) {
 
     row.addEventListener("dragend", () => {
       state.draggedExplorerPaths = [];
+      finishBrowserUploadDrag();
       renderDirectory(state.explorerEntries);
     });
 
@@ -4455,7 +4539,7 @@ function wireEvents() {
       return;
     }
     if (action === "tutorial") {
-      elements.tutorialDialog?.showModal();
+      openTutorialPdf();
       return;
     }
     if (action === "menu") {
@@ -4555,10 +4639,12 @@ function wireEvents() {
     state.currentDir = next.directory.currentDir;
     state.mappings = next.mappings;
     elements.rootDirLabel.textContent = next.rootDir || UI_TEXT.rootUnset;
+    refreshOnboardingState();
     renderCurrentPath(next.directory.currentDir);
     renderDirectory(next.directory.entries);
     renderMappings();
     toast("保存ルートを更新しました", "success");
+    return next;
   }
 
   document.querySelector("#choose-root-button")?.addEventListener("click", chooseRootDirectory);
@@ -4581,7 +4667,34 @@ function wireEvents() {
         moodleHome: elements.moodleHomeInput.value,
       });
       setMoodleHome(preferences.moodleHome);
+      elements.onboardingMoodleHomeInput.value = preferences.moodleHome;
+      refreshOnboardingState();
       toast("Moodle URL を保存しました", "success");
+    } catch (error) {
+      toast(error.message, "error");
+    }
+  });
+
+  elements.onboardingMoodleHomeInput?.addEventListener("input", refreshOnboardingState);
+  elements.onboardingChooseRootButton?.addEventListener("click", async () => {
+    await chooseRootDirectory();
+  });
+  elements.onboardingCompleteButton?.addEventListener("click", async () => {
+    if (!canCompleteOnboarding()) {
+      refreshOnboardingState();
+      return;
+    }
+    try {
+      const preferences = await window.fuzzyApi.updatePreferences({
+        moodleHome: elements.onboardingMoodleHomeInput.value,
+        onboardingCompleted: true,
+      });
+      setMoodleHome(preferences.moodleHome);
+      state.onboardingCompleted = true;
+      elements.moodleHomeInput.value = preferences.moodleHome;
+      elements.onboardingDialog?.close();
+      openTutorialPdf();
+      toast("初回設定を保存しました", "success");
     } catch (error) {
       toast(error.message, "error");
     }
@@ -4685,7 +4798,6 @@ function wireEvents() {
   });
   bindDialogBackdropClose(elements.settingsDialog);
   bindDialogBackdropClose(elements.mappingDialog);
-  bindDialogBackdropClose(elements.tutorialDialog);
 
   elements.shortcutList?.addEventListener("click", (event) => {
     const input = event.target.closest("[data-shortcut-input]");
@@ -4961,6 +5073,7 @@ async function initialize() {
   const defaults = await window.fuzzyApi.getDefaults();
   setMoodleHome(defaults.moodleHome);
   state.dashboardAutoload = Boolean(defaults.dashboardAutoload);
+  state.onboardingCompleted = Boolean(defaults.onboardingCompleted);
   state.keyBindings = normalizeKeyBindingMap(defaults.keyBindings);
   applyAutoUpdateStatus({
     currentVersion: defaults.appVersion || "",
@@ -4973,6 +5086,9 @@ async function initialize() {
   state.mappings = initial.mappings;
 
   elements.rootDirLabel.textContent = initial.rootDir || UI_TEXT.rootUnset;
+  elements.onboardingRootDirLabel.textContent = initial.rootDir || UI_TEXT.rootUnset;
+  elements.onboardingMoodleHomeInput.value = defaults.moodleHome || "";
+  elements.moodleHomeInput.value = defaults.moodleHome || "";
   renderCurrentPath(initial.directory.currentDir);
 
   renderDirectory(initial.directory.entries);
@@ -4989,6 +5105,10 @@ async function initialize() {
   }
 
   createBrowserTab(getMoodleLoginUrl(), UI_TEXT.defaultBrowserTitle);
+  refreshOnboardingState();
+  if (!state.onboardingCompleted || !state.rootDir) {
+    elements.onboardingDialog?.showModal();
+  }
 }
 
 window.fuzzyApi.onAppUpdateEvent((payload) => {

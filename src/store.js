@@ -59,6 +59,7 @@ class Store {
         downloadHistory: [],
         preferences: {
           dashboardAutoload: false,
+          onboardingCompleted: false,
           keyBindings: {},
         },
       };
@@ -73,8 +74,12 @@ class Store {
   getState() {
     this.state.preferences ??= {
       dashboardAutoload: false,
+      onboardingCompleted: false,
       keyBindings: {},
     };
+    if (typeof this.state.preferences.onboardingCompleted !== "boolean") {
+      this.state.preferences.onboardingCompleted = false;
+    }
     if (!this.state.preferences.keyBindings || typeof this.state.preferences.keyBindings !== "object") {
       this.state.preferences.keyBindings = {};
     }
