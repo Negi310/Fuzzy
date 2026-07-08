@@ -1,6 +1,6 @@
 {
   "name": "fuzitter",
-  "version": "0.1.25",
+  "version": "0.1.27",
   "author": "Negi310",
   "description": "Moodle-integrated desktop workspace for local file organization",
   "main": "src/main.js",
@@ -34,7 +34,6 @@
     },
     "win": {
       "icon": "assets/fuzitter.ico",
-      "signAndEditExecutable": false,
       "target": [
         {
           "target": "nsis",
