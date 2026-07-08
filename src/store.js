@@ -60,6 +60,7 @@ class Store {
         preferences: {
           dashboardAutoload: false,
           onboardingCompleted: false,
+          startupAutoLaunchRegistered: false,
           keyBindings: {},
         },
       };
@@ -75,10 +76,14 @@ class Store {
     this.state.preferences ??= {
       dashboardAutoload: false,
       onboardingCompleted: false,
+      startupAutoLaunchRegistered: false,
       keyBindings: {},
     };
     if (typeof this.state.preferences.onboardingCompleted !== "boolean") {
       this.state.preferences.onboardingCompleted = false;
+    }
+    if (typeof this.state.preferences.startupAutoLaunchRegistered !== "boolean") {
+      this.state.preferences.startupAutoLaunchRegistered = false;
     }
     if (!this.state.preferences.keyBindings || typeof this.state.preferences.keyBindings !== "object") {
       this.state.preferences.keyBindings = {};
