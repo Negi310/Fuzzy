@@ -357,3 +357,103 @@ console.log(
 "Thank you for visiting!"
 
 );
+
+// =========================
+// Latest Release Download
+// =========================
+
+const latestDownloadButtons=document.querySelectorAll(
+
+".js-latest-download"
+
+);
+
+const latestReleaseApiUrl=
+"https://api.github.com/repos/Negi310/Fuzzy/releases/latest";
+
+let latestExeUrlPromise=null;
+
+async function resolveLatestExeUrl(){
+
+if(!latestExeUrlPromise){
+
+latestExeUrlPromise=fetch(latestReleaseApiUrl)
+.then(response=>{
+
+if(!response.ok){
+
+throw new Error("Failed to fetch latest release.");
+
+}
+
+return response.json();
+
+})
+.then(release=>{
+
+const asset=release.assets.find(item=>
+/^Fuzitter-Setup-.*\.exe$/i.test(item.name)
+);
+
+if(!asset){
+
+throw new Error("Latest release exe asset was not found.");
+
+}
+
+return asset.browser_download_url;
+
+});
+
+}
+
+return latestExeUrlPromise;
+
+}
+
+latestDownloadButtons.forEach(button=>{
+
+button.addEventListener("click",async event=>{
+
+const fallbackUrl=
+button.dataset.fallbackUrl||button.href;
+
+try{
+
+event.preventDefault();
+
+const latestExeUrl=await resolveLatestExeUrl();
+
+button.href=latestExeUrl;
+
+window.location.href=latestExeUrl;
+
+}
+
+catch(error){
+
+console.warn(error);
+
+button.href=fallbackUrl;
+
+}
+
+});
+
+});
+
+resolveLatestExeUrl()
+.then(latestExeUrl=>{
+
+latestDownloadButtons.forEach(button=>{
+
+button.href=latestExeUrl;
+
+});
+
+})
+.catch(error=>{
+
+console.warn(error);
+
+});
