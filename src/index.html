@@ -151,32 +151,35 @@
         </form>
       </dialog>
 
-      <dialog id="tutorial-dialog" class="download-dialog tutorial-dialog">
-        <form method="dialog" class="download-form tutorial-form">
+      <dialog id="onboarding-dialog" class="download-dialog onboarding-dialog">
+        <form method="dialog" class="download-form tutorial-form onboarding-form">
           <div class="dialog-header">
-            <h2>チュートリアル</h2>
-            <button value="cancel" class="ghost-button">閉じる</button>
+            <h2>はじめての設定</h2>
           </div>
 
           <section class="settings-section tutorial-section">
-            <h3>画面構成</h3>
-            <p class="dialog-help">上部はブラウザ、右側はエクスプローラーとタイムラインです。Moodle を見ながら資料整理や提出準備を進められます。</p>
+            <h3>1. Moodle URL を設定する</h3>
+            <p class="dialog-help">先に Moodle の URL と保存ルートを設定してください。設定が完了すると、日本語の PDF チュートリアルが自動で開きます。</p>
           </section>
 
-          <section class="settings-section tutorial-section">
-            <h3>基本操作</h3>
-            <p class="dialog-help">アドレス欄でページ移動、星マークでお気に入り、右側タブでエクスプローラーとタイムラインを切り替えます。歯車から設定を開けます。</p>
+          <section class="settings-section">
+            <h3>Moodle URL</h3>
+            <input id="onboarding-moodle-home-input" class="dialog-input" type="text" />
+            <p class="dialog-help">講義ページを開くときの基準 URL です。迷う場合は設定画面からあとで変更できます。</p>
           </section>
 
-          <section class="settings-section tutorial-section">
-            <h3>主な機能</h3>
-            <p class="dialog-help">コースとフォルダの紐づけ、提出フォルダへの移動、タイムラインから課題ページへの移動、ファイル整理、ドラッグアンドドロップに対応しています。</p>
+          <section class="settings-section">
+            <h3>保存ルート</h3>
+            <div id="onboarding-root-dir-label" class="path-chip"></div>
+            <div class="dialog-inline-actions">
+              <button id="onboarding-choose-root-button" type="button" class="secondary-button">フォルダを選ぶ</button>
+            </div>
+            <p class="dialog-help">資料やコースフォルダを保存する起点フォルダです。</p>
           </section>
 
-          <section class="settings-section tutorial-section">
-            <h3>困ったとき</h3>
-            <p class="dialog-help">設定から Moodle URL やコース紐づけを見直せます。紐づけを消去すると、次にコースを開いたときに再設定ダイアログが表示されます。</p>
-          </section>
+          <menu class="dialog-actions">
+            <button id="onboarding-complete-button" type="button" class="secondary-button" disabled>設定をはじめる</button>
+          </menu>
         </form>
       </dialog>
 

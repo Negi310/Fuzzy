@@ -2324,6 +2324,29 @@ async function uploadFilesToTab(tabId, filePaths = [], tabUrl = "") {
     const uploadResult = await targetContents.executeJavaScript(`
       (async () => {
         const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+        const frameDocs = (rootDocument = document, seen = new Set()) => {
+          const docs = [];
+          const visit = (doc) => {
+            if (!doc || seen.has(doc)) {
+              return;
+            }
+            seen.add(doc);
+            docs.push(doc);
+            const frames = doc.querySelectorAll ? doc.querySelectorAll("iframe") : [];
+            for (const frame of frames) {
+              try {
+                const childDoc = frame.contentDocument || frame.contentWindow?.document || null;
+                if (childDoc) {
+                  visit(childDoc);
+                }
+              } catch (_error) {
+                // Ignore cross-origin frames.
+              }
+            }
+          };
+          visit(rootDocument);
+          return docs;
+        };
         const walk = (root) => {
           if (!root) {
             return null;
@@ -2342,6 +2365,15 @@ async function uploadFilesToTab(tabId, filePaths = [], tabUrl = "") {
               if (match) {
                 return match;
               }
+            }
+          }
+          return null;
+        };
+        const findTaggedInput = () => {
+          for (const doc of frameDocs()) {
+            const match = walk(doc);
+            if (match) {
+              return match;
             }
           }
           return null;
@@ -2399,14 +2431,13 @@ async function uploadFilesToTab(tabId, filePaths = [], tabUrl = "") {
           return true;
         };
 
-        const input = walk(document);
+        const input = findTaggedInput();
         if (!input) {
           return { finalized: false, submitted: false };
         }
 
         input.dispatchEvent(new Event("input", { bubbles: true, composed: true }));
         input.dispatchEvent(new Event("change", { bubbles: true, composed: true }));
-        input.dispatchEvent(new InputEvent("input", { bubbles: true, composed: true, inputType: "insertFromDrop", data: null }));
 
         let submitted = false;
         let attached = false;
@@ -2445,11 +2476,14 @@ async function uploadFilesToTab(tabId, filePaths = [], tabUrl = "") {
             await delay(80);
           }
         } else if (${JSON.stringify(uploadKind)} === "chatgpt") {
+          const ownerDocument = input.ownerDocument || document;
           const roots = [
             input.closest("form"),
             input.closest("[data-testid*='composer']"),
             input.closest("[data-testid*='message-composer']"),
             input.closest("[class*='composer']"),
+            input.closest("main"),
+            ownerDocument,
             document,
           ].filter(Boolean);
           for (const root of roots) {
@@ -2457,9 +2491,12 @@ async function uploadFilesToTab(tabId, filePaths = [], tabUrl = "") {
             root.dispatchEvent?.(new Event("change", { bubbles: true, composed: true }));
           }
           for (let attempt = 0; attempt < 20; attempt += 1) {
-            const pageText = normalize(document.body?.textContent || "");
+            const pageText = normalize(ownerDocument.body?.textContent || document.body?.textContent || "");
             const attachedNames = fileNames.filter((name) => pageText.includes(normalize(name)));
-            const chips = document.querySelectorAll("[data-testid*='attachment'], [data-testid*='upload'], [aria-label*='attachment'], [aria-label*='uploaded']");
+            const chips = [
+              ...ownerDocument.querySelectorAll("[data-testid*='attachment'], [data-testid*='upload'], [aria-label*='attachment'], [aria-label*='uploaded']"),
+              ...document.querySelectorAll("[data-testid*='attachment'], [data-testid*='upload'], [aria-label*='attachment'], [aria-label*='uploaded']"),
+            ];
             if (attachedNames.length || chips.length) {
               attached = true;
               break;
@@ -2814,6 +2851,7 @@ app.on("before-quit", (event) => {
 ipcMain.handle("app:defaults", () => ({
   moodleHome: normalizeMoodleHomeUrl(store.getState().preferences?.moodleHome || WAKAYAMA_MOODLE_HOME),
   dashboardAutoload: Boolean(store.getState().preferences?.dashboardAutoload),
+  onboardingCompleted: Boolean(store.getState().preferences?.onboardingCompleted),
   keyBindings: store.getState().preferences?.keyBindings && typeof store.getState().preferences.keyBindings === "object"
     ? { ...store.getState().preferences.keyBindings }
     : {},
@@ -2825,6 +2863,9 @@ ipcMain.handle("app:preferences:update", (_event, payload) => {
   if (typeof payload.dashboardAutoload === "boolean") {
     store.setPreference("dashboardAutoload", payload.dashboardAutoload);
   }
+  if (typeof payload.onboardingCompleted === "boolean") {
+    store.setPreference("onboardingCompleted", payload.onboardingCompleted);
+  }
   if (typeof payload.moodleHome === "string") {
     store.setPreference("moodleHome", normalizeMoodleHomeUrl(payload.moodleHome));
   }
@@ -2834,6 +2875,7 @@ ipcMain.handle("app:preferences:update", (_event, payload) => {
   return {
     moodleHome: normalizeMoodleHomeUrl(store.getState().preferences?.moodleHome || WAKAYAMA_MOODLE_HOME),
     dashboardAutoload: Boolean(store.getState().preferences?.dashboardAutoload),
+    onboardingCompleted: Boolean(store.getState().preferences?.onboardingCompleted),
     keyBindings: store.getState().preferences?.keyBindings && typeof store.getState().preferences.keyBindings === "object"
       ? { ...store.getState().preferences.keyBindings }
       : {},
