@@ -43,7 +43,12 @@ const SHORTCUT_ACTIONS = [
   { id: "openRootFolder", label: "Fuzitterフォルダを開く" },
   { id: "refreshPanel", label: "更新" },
   { id: "openSettings", label: "設定" },
+  { id: "renameSelection", label: "選択項目をリネーム" },
 ];
+
+const DEFAULT_KEY_BINDINGS = {
+  renameSelection: "F2",
+};
 
 const state = {
   moodleHome: "https://moodle2026.wakayama-u.ac.jp/2026/",
@@ -196,7 +201,9 @@ function escapeHtml(value) {
 function normalizeKeyBindingMap(rawBindings = {}) {
   const next = {};
   for (const action of SHORTCUT_ACTIONS) {
-    const value = typeof rawBindings[action.id] === "string" ? rawBindings[action.id].trim() : "";
+    const value = typeof rawBindings[action.id] === "string"
+      ? rawBindings[action.id].trim()
+      : (DEFAULT_KEY_BINDINGS[action.id] || "");
     if (value) {
       next[action.id] = value;
     }
@@ -1977,6 +1984,22 @@ async function openRootFolderAction() {
   return true;
 }
 
+async function openRenameSelectionAction() {
+  const selectedEntries = getSelectedExplorerEntries();
+  if (selectedEntries.length !== 1) {
+    toast(
+      selectedEntries.length > 1
+        ? "Rename は 1 件だけ選択して実行してください"
+        : "Rename する項目を 1 件選択してください",
+      "warn"
+    );
+    return false;
+  }
+
+  showRenameDialog(selectedEntries[0]);
+  return true;
+}
+
 async function executeShortcutAction(actionId) {
   const currentTab = getActiveTab();
   switch (actionId) {
@@ -2023,6 +2046,8 @@ async function executeShortcutAction(actionId) {
         elements.settingsDialog.showModal();
       }
       return true;
+    case "renameSelection":
+      return await openRenameSelectionAction();
     default:
       return false;
   }

@@ -1790,6 +1790,42 @@ async function flushPersistentSession() {
   ]);
 }
 
+function ensureStartupAutoLaunchRegistration() {
+  if (process.platform !== "win32" || !app.isPackaged || !store) {
+    return;
+  }
+
+  const preferences = store.getState().preferences || {};
+  const alreadyRegistered = Boolean(preferences.startupAutoLaunchRegistered);
+  const loginSettings = app.getLoginItemSettings({
+    path: process.execPath,
+    args: [],
+  });
+
+  if (loginSettings.openAtLogin) {
+    if (!alreadyRegistered) {
+      store.setPreference("startupAutoLaunchRegistered", true);
+    }
+    return;
+  }
+
+  if (alreadyRegistered) {
+    return;
+  }
+
+  try {
+    app.setLoginItemSettings({
+      openAtLogin: true,
+      openAsHidden: false,
+      path: process.execPath,
+      args: [],
+    });
+    store.setPreference("startupAutoLaunchRegistered", true);
+  } catch (error) {
+    console.error("[startup-autolaunch]", error);
+  }
+}
+
 function createWindow() {
   mainWindow = new BrowserWindow({
     width: 1540,
@@ -2642,6 +2678,7 @@ app.whenReady().then(() => {
   }
   migrateLegacyStateToFuzitter();
   store = new Store(getStoreFilePath());
+  ensureStartupAutoLaunchRegistration();
   fuzzySession = session.fromPartition(FUZITTER_PARTITION);
   fuzzySession.setPermissionCheckHandler((_webContents, permission, requestingOrigin, details) => (
     shouldAllowStorageAccessPermission(permission, requestingOrigin, details)

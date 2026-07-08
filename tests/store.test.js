@@ -67,3 +67,22 @@ test("findMappingByPath returns null when no mapped folder matches", () => {
     cleanup();
   }
 });
+
+test("store initializes startup auto launch preference when missing", () => {
+  const { store, cleanup } = createTempStore({
+    rootDir: "C:\\Downloads\\Fuzzy",
+    mappings: [],
+    downloadHistory: [],
+    preferences: {
+      dashboardAutoload: false,
+      onboardingCompleted: true,
+    },
+  });
+
+  try {
+    const state = store.getState();
+    assert.equal(state.preferences.startupAutoLaunchRegistered, false);
+  } finally {
+    cleanup();
+  }
+});
