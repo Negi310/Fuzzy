@@ -1,0 +1,55 @@
+name: Deploy GitHub Pages
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/github-pages.yml"
+      - "FuzitterSite/FuzitterSite/**"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: github-pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Prepare static site
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p _site
+          cp FuzitterSite/FuzitterSite/index.html _site/index.html
+          cp FuzitterSite/FuzitterSite/style.css _site/style.css
+          cp FuzitterSite/FuzitterSite/script.js _site/script.js
+          cp -R FuzitterSite/FuzitterSite/assets _site/assets
+          touch _site/.nojekyll
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
