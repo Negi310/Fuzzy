@@ -2234,6 +2234,29 @@ async function findUploadInputNodeId(targetContents, uploadKind) {
   if (!nodeId) {
     const evalResult = await targetContents.debugger.sendCommand("Runtime.evaluate", {
       expression: `(() => {
+        const frameDocs = (rootDocument = document, seen = new Set()) => {
+          const docs = [];
+          const visit = (doc) => {
+            if (!doc || seen.has(doc)) {
+              return;
+            }
+            seen.add(doc);
+            docs.push(doc);
+            const frames = doc.querySelectorAll ? doc.querySelectorAll("iframe") : [];
+            for (const frame of frames) {
+              try {
+                const childDoc = frame.contentDocument || frame.contentWindow?.document || null;
+                if (childDoc) {
+                  visit(childDoc);
+                }
+              } catch (_error) {
+                // Ignore cross-origin frames.
+              }
+            }
+          };
+          visit(rootDocument);
+          return docs;
+        };
         const walk = (root) => {
           if (!root) {
             return null;
@@ -2256,7 +2279,13 @@ async function findUploadInputNodeId(targetContents, uploadKind) {
           }
           return null;
         };
-        return walk(document);
+        for (const doc of frameDocs()) {
+          const match = walk(doc);
+          if (match) {
+            return match;
+          }
+        }
+        return null;
       })()`,
       objectGroup: "fuzitter-upload",
     });
@@ -2478,26 +2507,38 @@ async function uploadFilesToTab(tabId, filePaths = [], tabUrl = "") {
         } else if (${JSON.stringify(uploadKind)} === "chatgpt") {
           const ownerDocument = input.ownerDocument || document;
           const roots = [
-            input.closest("form"),
             input.closest("[data-testid*='composer']"),
             input.closest("[data-testid*='message-composer']"),
+            input.closest("form"),
             input.closest("[class*='composer']"),
             input.closest("main"),
             ownerDocument,
             document,
-          ].filter(Boolean);
-          for (const root of roots) {
-            root.dispatchEvent?.(new Event("input", { bubbles: true, composed: true }));
-            root.dispatchEvent?.(new Event("change", { bubbles: true, composed: true }));
-          }
-          for (let attempt = 0; attempt < 20; attempt += 1) {
+          ].filter(Boolean).filter((root, index, array) => array.indexOf(root) === index);
+          const primaryRoot = roots[0] || ownerDocument;
+          const detectAttachment = () => {
             const pageText = normalize(ownerDocument.body?.textContent || document.body?.textContent || "");
             const attachedNames = fileNames.filter((name) => pageText.includes(normalize(name)));
             const chips = [
               ...ownerDocument.querySelectorAll("[data-testid*='attachment'], [data-testid*='upload'], [aria-label*='attachment'], [aria-label*='uploaded']"),
               ...document.querySelectorAll("[data-testid*='attachment'], [data-testid*='upload'], [aria-label*='attachment'], [aria-label*='uploaded']"),
             ];
-            if (attachedNames.length || chips.length) {
+            return attachedNames.length || chips.length;
+          };
+          input.dispatchEvent(new Event("change", { bubbles: true, composed: true }));
+          for (let attempt = 0; attempt < 8; attempt += 1) {
+            if (detectAttachment()) {
+              attached = true;
+              break;
+            }
+            await delay(100);
+          }
+          if (!attached) {
+            primaryRoot.dispatchEvent?.(new Event("input", { bubbles: true, composed: true }));
+            primaryRoot.dispatchEvent?.(new Event("change", { bubbles: true, composed: true }));
+          }
+          for (let attempt = 0; attempt < 20; attempt += 1) {
+            if (detectAttachment()) {
               attached = true;
               break;
             }
@@ -2539,7 +2580,32 @@ async function uploadFilesToTab(tabId, filePaths = [], tabUrl = "") {
               }
             }
           };
-          clear(document);
+          const frameDocs = (rootDocument = document, seen = new Set()) => {
+            const docs = [];
+            const visit = (doc) => {
+              if (!doc || seen.has(doc)) {
+                return;
+              }
+              seen.add(doc);
+              docs.push(doc);
+              const frames = doc.querySelectorAll ? doc.querySelectorAll("iframe") : [];
+              for (const frame of frames) {
+                try {
+                  const childDoc = frame.contentDocument || frame.contentWindow?.document || null;
+                  if (childDoc) {
+                    visit(childDoc);
+                  }
+                } catch (_error) {
+                  // Ignore cross-origin frames.
+                }
+              }
+            };
+            visit(rootDocument);
+            return docs;
+          };
+          for (const doc of frameDocs()) {
+            clear(doc);
+          }
         })();
       `, true);
     } catch (_error) {
