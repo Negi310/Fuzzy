@@ -1326,7 +1326,7 @@ function bindBrowserUploadDropTarget(target, tab) {
   });
 
   target.addEventListener("drop", async (event) => {
-    if (!state.draggedExplorerPaths.length) {
+    if (!state.browserUploadArmed || !state.draggedExplorerPaths.length) {
       return;
     }
     if (!support) {
@@ -1337,17 +1337,18 @@ function bindBrowserUploadDropTarget(target, tab) {
     }
     event.preventDefault();
     event.stopPropagation();
+    event.stopImmediatePropagation?.();
     const draggedPaths = state.pendingBrowserUploadPaths.length
       ? [...state.pendingBrowserUploadPaths]
       : [...state.draggedExplorerPaths];
+    clearBrowserUploadDropState();
+    state.draggedExplorerPaths = [];
     try {
       const result = await uploadDraggedFilesToTab(tab, draggedPaths);
       toast(`${support.label} に ${result?.count || draggedPaths.length} 件のファイルを渡しました`, "success");
     } catch (error) {
       toast(error.message, "error");
     } finally {
-      clearBrowserUploadDropState();
-      state.draggedExplorerPaths = [];
       clearPendingBrowserUploadPaths();
     }
   });
@@ -2750,14 +2751,21 @@ function shouldUseNativeExternalFileDrag(entry) {
   if (state.selectedExplorerPaths.size > 1) {
     return false;
   }
-  if (getExplorerFileIcon(entry).kind === "file") {
-    return false;
-  }
   return true;
 }
 
 function shouldUseManagedBrowserUploadDrag() {
-  return Boolean(getUploadSupportForTab(getActiveTab()));
+  const support = getUploadSupportForTab(getActiveTab());
+  if (!support || support.kind === "moodle") {
+    return false;
+  }
+  if (support.kind === "chatgpt") {
+    return true;
+  }
+  if (support.kind === "gemini") {
+    return false;
+  }
+  return state.selectedExplorerPaths.size > 1;
 }
 
 function copySelectedExplorerEntries() {
@@ -3943,11 +3951,15 @@ function renderDirectory(entries) {
       state.draggedExplorerPaths = state.selectedExplorerPaths.has(entry.path)
         ? [...state.selectedExplorerPaths]
         : [entry.path];
-      state.pendingBrowserUploadPaths = [...state.draggedExplorerPaths];
-      state.browserUploadArmed = true;
-      scheduleBrowserUploadReset();
-      primeBrowserUploadDropzones();
-      syncBrowserUploadDropState(state.activeTabId || "");
+      if (useManagedBrowserUpload) {
+        state.pendingBrowserUploadPaths = [...state.draggedExplorerPaths];
+        state.browserUploadArmed = true;
+        scheduleBrowserUploadReset();
+        primeBrowserUploadDropzones();
+        syncBrowserUploadDropState(state.activeTabId || "");
+      } else {
+        clearBrowserUploadDropState();
+      }
       if (useNativeExternalDrag) {
         event.preventDefault();
       }
