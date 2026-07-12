@@ -67,8 +67,6 @@ const SITE_STORAGE_TYPES = Object.freeze([
   "localstorage",
   "serviceworkers",
   "cachestorage",
-  "shadercache",
-  "websql",
 ]);
 
 function buildCookieRemovalUrl(cookie) {
@@ -87,22 +85,23 @@ async function clearSiteData(targetSession, target) {
   const cookieResults = await Promise.allSettled(targetCookies.map((cookie) =>
     targetSession.cookies.remove(buildCookieRemovalUrl(cookie), cookie.name)
   ));
-
-  await Promise.all(target.origins.map((origin) =>
+  const storageResults = await Promise.allSettled(target.origins.map((origin) =>
     targetSession.clearStorageData({ origin, storages: [...SITE_STORAGE_TYPES] })
   ));
-  await Promise.all([
+  const flushResults = await Promise.allSettled([
     targetSession.flushStorageData(),
     targetSession.cookies.flushStore(),
   ]);
 
   const failedCookies = cookieResults.filter((result) => result.status === "rejected").length;
-  if (failedCookies) {
-    throw new Error(`Failed to clear ${failedCookies} site cookies.`);
-  }
+  const failedOrigins = storageResults.filter((result) => result.status === "rejected").length;
+  const failedFlushes = flushResults.filter((result) => result.status === "rejected").length;
+  const failedOperations = failedCookies + failedOrigins + failedFlushes;
   return {
-    clearedCookies: targetCookies.length,
-    clearedOrigins: target.origins.length,
+    ok: failedOperations === 0,
+    clearedCookies: targetCookies.length - failedCookies,
+    clearedOrigins: target.origins.length - failedOrigins,
+    failedOperations,
   };
 }
 

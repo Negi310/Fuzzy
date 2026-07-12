@@ -502,13 +502,7 @@ async function resetSiteData(siteKey) {
   const moodleHome = normalizeMoodleHomeUrl(store.getState().preferences?.moodleHome);
   const target = getSiteDataTarget(siteKey, { moodleHome });
   if (!fuzzySession) {
-    return {
-      siteKey: target.key,
-      label: target.label,
-      reloadHosts: target.cookieHosts,
-      clearedCookies: 0,
-      clearedOrigins: 0,
-    };
+    throw new Error("Site data session is unavailable.");
   }
 
   siteDataResetInFlight = true;

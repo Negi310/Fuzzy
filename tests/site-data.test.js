@@ -72,7 +72,12 @@ test("clearSiteData clears only matching cookies and singular target origins", a
   });
 
   const result = await clearSiteData(mock.session, target);
-  assert.deepEqual(result, { clearedCookies: 1, clearedOrigins: 1 });
+  assert.deepEqual(result, {
+    ok: true,
+    clearedCookies: 1,
+    clearedOrigins: 1,
+    failedOperations: 0,
+  });
   assert.deepEqual(mock.calls.remove, [{
     url: "https://gemini.google.com/",
     name: "gemini",
@@ -82,6 +87,7 @@ test("clearSiteData clears only matching cookies and singular target origins", a
   assert.equal("origins" in mock.calls.clearStorageData[0], false);
   assert.equal(mock.calls.clearStorageData[0].storages.includes("cookies"), false);
   assert.equal(mock.calls.clearStorageData[0].storages.includes("cachestorage"), true);
+  assert.equal(mock.calls.clearStorageData[0].storages.includes("shadercache"), false);
   assert.equal(mock.calls.flushStorageData, 1);
   assert.equal(mock.calls.flushStore, 1);
 });
@@ -93,14 +99,25 @@ test("clearSiteData reports cookie removal failures after flushing storage", asy
     removeError: new Error("locked"),
   });
 
-  await assert.rejects(() => clearSiteData(mock.session, target), /Failed to clear 1 site cookies/);
+  const result = await clearSiteData(mock.session, target);
+  assert.deepEqual(result, {
+    ok: false,
+    clearedCookies: 0,
+    clearedOrigins: 1,
+    failedOperations: 1,
+  });
   assert.equal(mock.calls.clearStorageData.length, 1);
   assert.equal(mock.calls.flushStore, 1);
 });
 
-test("clearSiteData propagates storage clearing failures", async () => {
+test("clearSiteData reports storage failures and still flushes", async () => {
   const target = getSiteDataTarget("notebooklm");
   const mock = createSessionMock();
   mock.session.clearStorageData = async () => { throw new Error("storage failure"); };
-  await assert.rejects(() => clearSiteData(mock.session, target), /storage failure/);
+  const result = await clearSiteData(mock.session, target);
+  assert.equal(result.ok, false);
+  assert.equal(result.clearedOrigins, 0);
+  assert.equal(result.failedOperations, 1);
+  assert.equal(mock.calls.flushStorageData, 1);
+  assert.equal(mock.calls.flushStore, 1);
 });

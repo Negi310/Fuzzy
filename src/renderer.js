@@ -375,8 +375,20 @@ function reloadSiteTabsIgnoringCache(siteKey, siteHosts) {
     tab.webviewEl.reloadIgnoringCache();
     reloadedTabs += 1;
   }
-  if (siteKey === "moodle" && state.dashboardLoaded && elements.dashboardWebview?.reloadIgnoringCache) {
+  let dashboardUrl = "";
+  try {
+    dashboardUrl = elements.dashboardWebview?.getURL?.() || "";
+  } catch (_error) {
+    // A dashboard navigation can temporarily make getURL unavailable.
+  }
+  if (
+    siteKey === "moodle" &&
+    state.dashboardLoaded &&
+    tabMatchesSiteHosts({ url: dashboardUrl }, siteHosts) &&
+    elements.dashboardWebview?.reloadIgnoringCache
+  ) {
     elements.dashboardWebview.reloadIgnoringCache();
+    reloadedTabs += 1;
   }
   return reloadedTabs;
 }
@@ -4776,7 +4788,12 @@ function wireEvents() {
     try {
       const result = await window.fuzzyApi.resetSiteData(siteKey);
       const reloadedTabs = reloadSiteTabsIgnoringCache(siteKey, result?.reloadHosts || []);
-      toast(`${result?.label || siteLabel} を初期化しました (${result?.clearedCookies ?? 0} cookies / ${reloadedTabs} tabs)`, "success");
+      const resultMessage = `${result?.label || siteLabel} を初期化しました (${result?.clearedCookies ?? 0} cookies / ${reloadedTabs} tabs)`;
+      if (result?.ok === false) {
+        toast(`${resultMessage}。${result?.failedOperations || 0} 件の処理に失敗しました`, "warn");
+      } else {
+        toast(resultMessage, "success");
+      }
     } catch (error) {
       toast(error.message, "error");
     } finally {
