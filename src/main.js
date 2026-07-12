@@ -3,9 +3,10 @@ const { execFileSync, spawn } = require("node:child_process");
 const http = require("node:http");
 const https = require("node:https");
 const path = require("node:path");
-const { app, BrowserWindow, dialog, ipcMain, nativeImage, session, shell, webContents } = require("electron");
+const { app, BrowserWindow, dialog, ipcMain, Menu, nativeImage, session, shell, webContents } = require("electron");
 const { autoUpdater } = require("electron-updater");
 
+const { handleStandardCopyInput } = require("./input-utils");
 const { rankCandidates } = require("./similarity");
 const { Store } = require("./store");
 
@@ -1631,13 +1632,16 @@ function forwardShortcutInput(payload) {
   }
 }
 
-function attachShortcutForwarding(targetContents) {
+function attachShortcutForwarding(targetContents, { handleEditCommands = false } = {}) {
   if (!targetContents || targetContents.isDestroyed() || shortcutForwardedContents.has(targetContents.id)) {
     return;
   }
 
   shortcutForwardedContents.add(targetContents.id);
-  targetContents.on("before-input-event", (_event, input) => {
+  targetContents.on("before-input-event", (event, input) => {
+    if (handleEditCommands && handleStandardCopyInput(event, input, targetContents)) {
+      return;
+    }
     forwardShortcutInput(buildShortcutInputFromElectron(input));
   });
   targetContents.once("destroyed", () => {
@@ -2702,6 +2706,21 @@ app.whenReady().then(() => {
     });
 
     contents.on("context-menu", (event, params) => {
+      if (String(params.selectionText || "").trim() && params.editFlags?.canCopy) {
+        event.preventDefault();
+        Menu.buildFromTemplate([
+          {
+            label: "コピー",
+            accelerator: "CmdOrCtrl+C",
+            click: () => {
+              if (!contents.isDestroyed()) {
+                contents.copy();
+              }
+            },
+          },
+        ]).popup({ window: mainWindow });
+        return;
+      }
       if (!params.linkURL) {
         return;
       }
@@ -3545,7 +3564,7 @@ ipcMain.handle("preview:cleanup", async (_event, targetPath) => {
 
 ipcMain.on("webview:register", (_event, payload) => {
   webContentsToTab.set(payload.webContentsId, payload.tabId);
-  attachShortcutForwarding(webContents.fromId(payload.webContentsId));
+  attachShortcutForwarding(webContents.fromId(payload.webContentsId), { handleEditCommands: true });
 });
 
 ipcMain.on("webview:unregister", (_event, payload) => {
