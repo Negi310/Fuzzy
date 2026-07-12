@@ -5,7 +5,7 @@ contextBridge.exposeInMainWorld("fuzzyApi", {
   updatePreferences: (payload) => ipcRenderer.invoke("app:preferences:update", payload),
   openExternalUrl: (targetUrl) => ipcRenderer.invoke("app:open-external", targetUrl),
   focusWindow: () => ipcRenderer.invoke("app:focus-window"),
-  resetAiSessions: () => ipcRenderer.invoke("session:ai:reset"),
+  resetSiteData: (siteKey) => ipcRenderer.invoke("session:site-data:reset", siteKey),
   checkForUpdates: () => ipcRenderer.invoke("app:update:check"),
   installDownloadedUpdate: () => ipcRenderer.invoke("app:update:install"),
   getState: () => ipcRenderer.invoke("state:get"),

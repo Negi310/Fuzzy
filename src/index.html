@@ -100,11 +100,17 @@
 
           <section class="settings-section">
             <div class="dialog-header compact">
-              <h2>AI サービス</h2>
+              <h2>サイトデータ</h2>
             </div>
-            <p class="dialog-help">Gemini、NotebookLM、ChatGPT のサインイン中に問題が出たときは、まとめてセッションを初期化してから再度ログインしてください。</p>
-            <div class="dialog-inline-actions">
-              <button id="reset-ai-session-button" type="button" class="secondary-button">セッション初期化</button>
+            <p class="dialog-help">表示やサインインに問題があるサイトだけを選び、Cookie とサイトデータを初期化します。他のサイトと Google 共通ログインのデータは維持されます。</p>
+            <div class="dialog-inline-actions site-data-reset-actions">
+              <select id="site-data-reset-select" class="dialog-input" aria-label="初期化するサイト">
+                <option value="moodle">Moodle</option>
+                <option value="chatgpt">ChatGPT</option>
+                <option value="gemini">Gemini</option>
+                <option value="notebooklm">NotebookLM</option>
+              </select>
+              <button id="reset-site-data-button" type="button" class="secondary-button">選択サイトを初期化</button>
             </div>
           </section>
 
