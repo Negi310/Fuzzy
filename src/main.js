@@ -8,6 +8,7 @@ const { autoUpdater } = require("electron-updater");
 
 const { rankCandidates } = require("./similarity");
 const { Store } = require("./store");
+const { hasNewAttachmentEvidence } = require("./upload-routing");
 
 const APP_NAME = "Fuzitter";
 const WAKAYAMA_MOODLE_HOME = "https://moodle2026.wakayama-u.ac.jp/2026/";
@@ -1928,7 +1929,10 @@ async function findUploadInputNodeId(targetContents, uploadKind) {
         if (!element) {
           return false;
         }
-        const style = window.getComputedStyle(element);
+        const style = element.ownerDocument?.defaultView?.getComputedStyle?.(element);
+        if (!style) {
+          return false;
+        }
         if (style.display === "none" || style.visibility === "hidden" || style.opacity === "0") {
           return false;
         }
@@ -1942,7 +1946,7 @@ async function findUploadInputNodeId(targetContents, uploadKind) {
         }
         const nodes = root.querySelectorAll ? root.querySelectorAll("*") : [];
         for (const node of nodes) {
-          if (node instanceof HTMLInputElement && node.type === "file" && !node.disabled) {
+          if (String(node.tagName || "").toLowerCase() === "input" && node.type === "file" && !node.disabled) {
             if (includeHidden || isVisible(node)) {
               bucket.push(node);
             }
@@ -1966,13 +1970,13 @@ async function findUploadInputNodeId(targetContents, uploadKind) {
         ];
         for (const doc of frameDocs()) {
           const exactMessage = [...doc.querySelectorAll(".dndupload-message, .filemanager .fp-content-center, .filemanager-container .fp-content-center")]
-            .find((node) => node instanceof HTMLElement && isVisible(node) && normalize(node.textContent).includes(expectedText));
+            .find((node) => node?.nodeType === 1 && isVisible(node) && normalize(node.textContent).includes(expectedText));
           if (exactMessage) {
             return exactMessage;
           }
           for (const selector of selectors) {
             const match = doc.querySelector(selector);
-            if (match instanceof HTMLElement && isVisible(match)) {
+            if (match?.nodeType === 1 && isVisible(match)) {
               return match;
             }
           }
@@ -1981,7 +1985,7 @@ async function findUploadInputNodeId(targetContents, uploadKind) {
       };
 
       const scoreInput = (candidate) => {
-        if (!(candidate instanceof HTMLInputElement) || candidate.type !== "file" || candidate.disabled) {
+        if (String(candidate?.tagName || "").toLowerCase() !== "input" || candidate.type !== "file" || candidate.disabled) {
           return -1;
         }
         let score = isVisible(candidate) ? 300 : 120;
@@ -2067,16 +2071,18 @@ async function findUploadInputNodeId(targetContents, uploadKind) {
       const clickSelectors = async (selectors) => {
         for (const doc of frameDocs()) {
           for (const selector of selectors) {
-            const candidate = doc.querySelector(selector);
-            if (candidate instanceof HTMLElement) {
+            const candidate = [...doc.querySelectorAll(selector)].find((node) => isVisible(node));
+            if (candidate) {
               candidate.click();
               await delay(90);
+              return true;
             }
           }
         }
+        return false;
       };
 
-      const clickByLabel = async (labels = []) => {
+      const clickByLabel = async (labels = [], { composerOnly = false } = {}) => {
         const selectors = [
           "button",
           "[role='button']",
@@ -2093,6 +2099,15 @@ async function findUploadInputNodeId(targetContents, uploadKind) {
           for (const doc of frameDocs()) {
             const candidates = [...doc.querySelectorAll(selectors.join(", "))];
             for (const candidate of candidates) {
+              if (!isVisible(candidate)) {
+                continue;
+              }
+              if (
+                composerOnly &&
+                !candidate.closest("form, [data-testid*='composer'], [data-testid*='message-composer'], [class*='composer']")
+              ) {
+                continue;
+              }
               const label = (
                 candidate.getAttribute("aria-label") ||
                 candidate.getAttribute("title") ||
@@ -2128,11 +2143,6 @@ async function findUploadInputNodeId(targetContents, uploadKind) {
       const clickGeminiFallback = async () => {
         await clickByLabel(["upload", "attach", "plus", "アップロード", "添付", "ツール"]);
         await clickByLabel(["upload files", "upload from computer", "ファイルをアップロード", "ファイルを追加", "パソコンからアップロード", "写真を追加"]);
-      };
-
-      const clickChatGptFallback = async () => {
-        await clickByLabel(["attach", "upload", "file", "plus", "paperclip"]);
-        await clickByLabel(["attach files", "upload files", "add photos and files", "choose files"]);
       };
 
       const collectInputs = (includeHidden = false) => frameDocs()
@@ -2215,7 +2225,7 @@ async function findUploadInputNodeId(targetContents, uploadKind) {
             "button[title*='Upload']",
           ]);
         } else if (${JSON.stringify(uploadKind)} === "chatgpt") {
-          await clickSelectors([
+          const openedAttachmentMenu = await clickSelectors([
             "button[aria-label*='Attach']",
             "button[aria-label*='attach']",
             "button[aria-label*='Upload']",
@@ -2228,7 +2238,13 @@ async function findUploadInputNodeId(targetContents, uploadKind) {
             "[data-testid*='attach']",
             "label[for][role='button']",
           ]);
-          await clickChatGptFallback();
+          if (!openedAttachmentMenu) {
+            await clickByLabel(
+              ["attach", "add photos and files", "paperclip", "ファイルを添付"],
+              { composerOnly: true }
+            );
+          }
+          await clickByLabel(["attach files", "upload files", "add photos and files", "choose files"]);
         }
 
         input = pickBestInput();
@@ -2238,6 +2254,30 @@ async function findUploadInputNodeId(targetContents, uploadKind) {
         return { ok: false, reason: "no-input", diagnostics: diagnostics() };
       }
 
+      if (${JSON.stringify(uploadKind)} === "chatgpt") {
+        const normalize = (value) => String(value || "").replace(/\\s+/g, " ").trim().toLowerCase();
+        const ownerDocument = input.ownerDocument || document;
+        const composerRoots = [
+          input.closest("[data-testid*='composer']"),
+          input.closest("[data-testid*='message-composer']"),
+          input.closest("form"),
+          input.closest("[class*='composer']"),
+          ...ownerDocument.querySelectorAll(
+            "[data-testid*='composer'], [data-testid*='message-composer'], form:has(textarea), form:has([contenteditable='true']), [class*='composer']"
+          ),
+          input.parentElement,
+        ].filter((root, index, array) => (
+          root && array.indexOf(root) === index && (root.contains?.(input) || isVisible(root))
+        ));
+        const composerText = normalize(composerRoots.map((root) => root.textContent || "").join(" "));
+        const chips = composerRoots.flatMap((root) => [...root.querySelectorAll(
+          "[data-testid*='attachment'], [data-testid*='file-preview'], [data-testid*='file-chip'], [aria-label*='uploaded']"
+        )]).filter((candidate, index, array) => (
+          array.indexOf(candidate) === index && !candidate.matches("input[type='file'], label, [role='menuitem']")
+        ));
+        const chipCount = chips.length;
+        input.setAttribute("data-fuzitter-attachment-baseline", JSON.stringify({ composerText, chipCount }));
+      }
       input.setAttribute("data-fuzitter-upload-target", "1");
       input.scrollIntoView?.({ block: "center", inline: "center" });
       return { ok: true, diagnostics: diagnostics() };
@@ -2300,7 +2340,7 @@ async function findUploadInputNodeId(targetContents, uploadKind) {
           const nodes = root.querySelectorAll ? root.querySelectorAll("*") : [];
           for (const node of nodes) {
             if (
-              node instanceof HTMLInputElement &&
+              String(node.tagName || "").toLowerCase() === "input" &&
               node.type === "file" &&
               node.getAttribute("data-fuzitter-upload-target") === "1"
             ) {
@@ -2386,6 +2426,10 @@ async function uploadFilesToTab(tabId, filePaths = [], tabUrl = "") {
       files: resolvedPaths,
     });
 
+    const encodedFileNames = Buffer.from(
+      JSON.stringify(resolvedPaths.map((filePath) => path.basename(filePath))),
+      "utf8"
+    ).toString("base64");
     const uploadResult = await targetContents.executeJavaScript(`
       (async () => {
         const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -2419,7 +2463,7 @@ async function uploadFilesToTab(tabId, filePaths = [], tabUrl = "") {
           const nodes = root.querySelectorAll ? root.querySelectorAll("*") : [];
           for (const node of nodes) {
             if (
-              node instanceof HTMLInputElement &&
+              String(node.tagName || "").toLowerCase() === "input" &&
               node.type === "file" &&
               node.getAttribute("data-fuzitter-upload-target") === "1"
             ) {
@@ -2444,18 +2488,25 @@ async function uploadFilesToTab(tabId, filePaths = [], tabUrl = "") {
           return null;
         };
         const isVisible = (element) => {
-          if (!(element instanceof HTMLElement)) {
+          if (element?.nodeType !== 1) {
             return false;
           }
-          const style = window.getComputedStyle(element);
+          const style = element.ownerDocument?.defaultView?.getComputedStyle?.(element);
+          if (!style) {
+            return false;
+          }
           if (style.display === "none" || style.visibility === "hidden" || style.opacity === "0" || element.hasAttribute("disabled")) {
             return false;
           }
           const rect = element.getBoundingClientRect();
           return rect.width > 0 && rect.height > 0;
         };
-        const normalize = (value) => String(value || "").replace(/\s+/g, " ").trim().toLowerCase();
-        const fileNames = ${JSON.stringify(resolvedPaths.map((filePath) => path.basename(filePath)))};
+        const normalize = (value) => String(value || "").replace(/\\s+/g, " ").trim().toLowerCase();
+        const fileNames = JSON.parse(new TextDecoder().decode(Uint8Array.from(
+          atob(${JSON.stringify(encodedFileNames)}),
+          (character) => character.charCodeAt(0)
+        )));
+        const detectNewAttachment = ${hasNewAttachmentEvidence.toString()};
         const clickMatching = (root, selectors, labels = []) => {
           const candidates = [...root.querySelectorAll(selectors.join(", "))];
           for (const candidate of candidates) {
@@ -2480,11 +2531,11 @@ async function uploadFilesToTab(tabId, filePaths = [], tabUrl = "") {
           return false;
         };
         const submitForm = (form) => {
-          if (!(form instanceof HTMLFormElement)) {
+          if (String(form?.tagName || "").toLowerCase() !== "form") {
             return false;
           }
           const submitControl = form.querySelector("button[type='submit'], input[type='submit']");
-          if (submitControl instanceof HTMLElement && isVisible(submitControl)) {
+          if (submitControl?.nodeType === 1 && isVisible(submitControl)) {
             submitControl.click();
             return true;
           }
@@ -2501,13 +2552,17 @@ async function uploadFilesToTab(tabId, filePaths = [], tabUrl = "") {
           return { finalized: false, submitted: false };
         }
 
-        input.dispatchEvent(new Event("input", { bubbles: true, composed: true }));
-        input.dispatchEvent(new Event("change", { bubbles: true, composed: true }));
+        const inputDocument = input.ownerDocument || document;
+        const InputEventConstructor = inputDocument.defaultView?.Event || Event;
+        if (${JSON.stringify(uploadKind)} !== "chatgpt") {
+          input.dispatchEvent(new InputEventConstructor("input", { bubbles: true, composed: true }));
+          input.dispatchEvent(new InputEventConstructor("change", { bubbles: true, composed: true }));
+        }
 
         let submitted = false;
         let attached = false;
         if (${JSON.stringify(uploadKind)} === "moodle") {
-          const localRoot = input.closest(".moodle-dialogue, .filepicker, .filemanager, .fp-formset, form") || document;
+          const localRoot = input.closest(".moodle-dialogue, .filepicker, .filemanager, .fp-formset, form") || inputDocument;
           const selectors = [
             "button",
             "input[type='submit']",
@@ -2531,7 +2586,7 @@ async function uploadFilesToTab(tabId, filePaths = [], tabUrl = "") {
           for (let attempt = 0; attempt < 12; attempt += 1) {
             if (
               clickMatching(localRoot, selectors, labels) ||
-              clickMatching(document, selectors, labels) ||
+              clickMatching(inputDocument, selectors, labels) ||
               submitForm(input.closest("form")) ||
               submitForm(localRoot.closest("form"))
             ) {
@@ -2541,40 +2596,44 @@ async function uploadFilesToTab(tabId, filePaths = [], tabUrl = "") {
             await delay(80);
           }
         } else if (${JSON.stringify(uploadKind)} === "chatgpt") {
-          const ownerDocument = input.ownerDocument || document;
-          const roots = [
-            input.closest("[data-testid*='composer']"),
-            input.closest("[data-testid*='message-composer']"),
-            input.closest("form"),
-            input.closest("[class*='composer']"),
-            input.closest("main"),
-            ownerDocument,
-            document,
-          ].filter(Boolean).filter((root, index, array) => array.indexOf(root) === index);
-          const primaryRoot = roots[0] || ownerDocument;
-          const detectAttachment = () => {
-            const pageText = normalize(ownerDocument.body?.textContent || document.body?.textContent || "");
-            const attachedNames = fileNames.filter((name) => pageText.includes(normalize(name)));
-            const chips = [
-              ...ownerDocument.querySelectorAll("[data-testid*='attachment'], [data-testid*='upload'], [aria-label*='attachment'], [aria-label*='uploaded']"),
-              ...document.querySelectorAll("[data-testid*='attachment'], [data-testid*='upload'], [aria-label*='attachment'], [aria-label*='uploaded']"),
-            ];
-            return attachedNames.length || chips.length;
+          const ownerDocument = inputDocument;
+          const collectAttachmentEvidence = () => {
+            const composerRoots = [
+              input.closest("[data-testid*='composer']"),
+              input.closest("[data-testid*='message-composer']"),
+              input.closest("form"),
+              input.closest("[class*='composer']"),
+              ...ownerDocument.querySelectorAll(
+                "[data-testid*='composer'], [data-testid*='message-composer'], form:has(textarea), form:has([contenteditable='true']), [class*='composer']"
+              ),
+              input.parentElement,
+            ].filter((root, index, array) => (
+              root && array.indexOf(root) === index && (root.contains?.(input) || isVisible(root))
+            ));
+            const composerText = normalize(composerRoots.map((root) => root.textContent || "").join(" "));
+            const chips = composerRoots.flatMap((root) => [...root.querySelectorAll(
+              "[data-testid*='attachment'], [data-testid*='file-preview'], [data-testid*='file-chip'], [aria-label*='uploaded']"
+            )]).filter((candidate, index, array) => (
+              array.indexOf(candidate) === index && !candidate.matches("input[type='file'], label, [role='menuitem']")
+            ));
+            return {
+              composerText,
+              chipCount: chips.length,
+            };
           };
-          input.dispatchEvent(new Event("change", { bubbles: true, composed: true }));
-          for (let attempt = 0; attempt < 8; attempt += 1) {
-            if (detectAttachment()) {
-              attached = true;
-              break;
-            }
-            await delay(100);
+          let baseline = collectAttachmentEvidence();
+          try {
+            baseline = JSON.parse(input.getAttribute("data-fuzitter-attachment-baseline") || "") || baseline;
+          } catch (_error) {
+            // Use the current evidence when the preparation snapshot is unavailable.
           }
-          if (!attached) {
-            primaryRoot.dispatchEvent?.(new Event("input", { bubbles: true, composed: true }));
-            primaryRoot.dispatchEvent?.(new Event("change", { bubbles: true, composed: true }));
-          }
-          for (let attempt = 0; attempt < 20; attempt += 1) {
-            if (detectAttachment()) {
+          const hasNewAttachment = () => {
+            const current = collectAttachmentEvidence();
+            return detectNewAttachment(baseline, current, fileNames);
+          };
+          input.dispatchEvent(new InputEventConstructor("change", { bubbles: true, composed: true }));
+          for (let attempt = 0; attempt < 28; attempt += 1) {
+            if (hasNewAttachment()) {
               attached = true;
               break;
             }
@@ -2583,6 +2642,7 @@ async function uploadFilesToTab(tabId, filePaths = [], tabUrl = "") {
         }
 
         input.removeAttribute("data-fuzitter-upload-target");
+        input.removeAttribute("data-fuzitter-attachment-baseline");
         return { finalized: true, submitted, attached };
       })();
     `, true);
@@ -2605,11 +2665,12 @@ async function uploadFilesToTab(tabId, filePaths = [], tabUrl = "") {
             const nodes = root.querySelectorAll ? root.querySelectorAll("*") : [];
             for (const node of nodes) {
               if (
-                node instanceof HTMLInputElement &&
+                String(node.tagName || "").toLowerCase() === "input" &&
                 node.type === "file" &&
                 node.getAttribute("data-fuzitter-upload-target") === "1"
               ) {
                 node.removeAttribute("data-fuzitter-upload-target");
+                node.removeAttribute("data-fuzitter-attachment-baseline");
               }
               if (node.shadowRoot) {
                 clear(node.shadowRoot);

@@ -880,6 +880,23 @@ function finishBrowserUploadDrag() {
   }, 120);
 }
 
+function buildBrowserUploadOverlayMarkup(support) {
+  return support
+    ? `<strong>あなたはファイルをここにドラッグ＆ドロップして追加できます。</strong><span>${escapeHtml(support.label)} の点線枠に直接アップロードします</span>`
+    : `<strong>ドラッグアップロード非対応</strong><span>このタブでは使えません</span>`;
+}
+
+function renderBrowserUploadOverlay(tab) {
+  const overlay = tab?.uploadOverlayEl;
+  if (!overlay) {
+    return;
+  }
+  const markup = buildBrowserUploadOverlayMarkup(getUploadSupportForTab(tab));
+  if (overlay.innerHTML !== markup) {
+    overlay.innerHTML = markup;
+  }
+}
+
 function syncBrowserUploadDropState(preferredTabId = "") {
   const supportedVisibleTabIds = new Set(
     state.tabs
@@ -901,6 +918,7 @@ function syncBrowserUploadDropState(preferredTabId = "") {
     const tabId = overlay.dataset.tabId || "";
     const isSupportedVisible = supportedVisibleTabIds.has(tabId);
     const tab = getTabById(tabId);
+    renderBrowserUploadOverlay(tab);
     const support = getUploadSupportForTab(tab);
     const needsTargeting = support?.kind === "moodle";
     const baseActive = nextActiveTabId ? nextActiveTabId === tabId : isSupportedVisible && state.browserUploadArmed;
@@ -1303,15 +1321,15 @@ async function uploadDraggedFilesToTab(tab, sourcePaths = null) {
 }
 
 function bindBrowserUploadDropTarget(target, tab) {
-  const support = getUploadSupportForTab(tab);
-  if (support?.kind === "moodle" && target !== tab.uploadOverlayEl) {
-    return;
-  }
   target.addEventListener("dragover", (event) => {
     if (!state.draggedExplorerPaths.length) {
       return;
     }
+    const support = getUploadSupportForTab(tab);
     if (!support || !getDraggedUploadEntries().length) {
+      return;
+    }
+    if (support.kind === "moodle" && target !== tab.uploadOverlayEl) {
       return;
     }
     if (support.kind === "moodle" && !tab.uploadOverlayEl?.classList.contains("targeted")) {
@@ -1336,7 +1354,11 @@ function bindBrowserUploadDropTarget(target, tab) {
     if (!state.browserUploadArmed || !state.draggedExplorerPaths.length) {
       return;
     }
+    const support = getUploadSupportForTab(tab);
     if (!support) {
+      return;
+    }
+    if (support.kind === "moodle" && target !== tab.uploadOverlayEl) {
       return;
     }
     if (support.kind === "moodle" && !isPointInsideBrowserUploadDropzone(tab, event.clientX, event.clientY)) {
@@ -1352,7 +1374,16 @@ function bindBrowserUploadDropTarget(target, tab) {
     state.draggedExplorerPaths = [];
     try {
       const result = await uploadDraggedFilesToTab(tab, draggedPaths);
-      toast(`${support.label} に ${result?.count || draggedPaths.length} 件のファイルを渡しました`, "success");
+      if (result?.deduped) {
+        return;
+      }
+      const attached = result?.uploadKind !== "chatgpt" || result?.attached !== false;
+      toast(
+        attached
+          ? `${support.label} に ${result?.count || draggedPaths.length} 件のファイルを渡しました`
+          : `${support.label} へファイルを渡しましたが、添付を確認できませんでした`,
+        attached ? "success" : "warn"
+      );
     } catch (error) {
       toast(error.message, "error");
     } finally {
@@ -2769,28 +2800,18 @@ function getParentPath(targetPath) {
   return normalized.slice(0, lastSeparatorIndex);
 }
 
-function shouldUseNativeExternalFileDrag(entry) {
-  if (!entry || entry.isDirectory) {
-    return false;
-  }
-  if (state.selectedExplorerPaths.size > 1) {
-    return false;
-  }
-  return true;
-}
-
-function shouldUseManagedBrowserUploadDrag() {
+function getExplorerDragMode(entry) {
   const support = getUploadSupportForTab(getActiveTab());
-  if (!support || support.kind === "moodle") {
-    return false;
-  }
-  if (support.kind === "chatgpt") {
-    return true;
-  }
-  if (support.kind === "gemini") {
-    return false;
-  }
-  return state.selectedExplorerPaths.size > 1;
+  const visibleSupportKinds = state.tabs
+    .filter((tab) => tab.contentEl?.classList.contains("visible"))
+    .map((tab) => getUploadSupportForTab(tab)?.kind)
+    .filter(Boolean);
+  return window.FuzitterUploadRouting.getExplorerDragMode({
+    supportKind: support?.kind || "",
+    supportKinds: visibleSupportKinds,
+    selectedCount: state.selectedExplorerPaths.size,
+    isDirectory: Boolean(entry?.isDirectory),
+  });
 }
 
 function copySelectedExplorerEntries() {
@@ -3019,9 +3040,7 @@ function mountBrowserLikeTab(tab, usePreload = true) {
   const uploadOverlay = document.createElement("div");
   uploadOverlay.className = "browser-upload-dropzone";
   uploadOverlay.dataset.tabId = tab.id;
-  uploadOverlay.innerHTML = uploadSupport
-    ? `<strong>あなたはファイルをここにドラッグ＆ドロップして追加できます。</strong><span>${escapeHtml(uploadSupport.label)} の点線枠に直接アップロードします</span>`
-    : `<strong>ドラッグアップロード非対応</strong><span>このタブでは使えません</span>`;
+  uploadOverlay.innerHTML = buildBrowserUploadOverlayMarkup(uploadSupport);
 
   const webview = document.createElement("webview");
   webview.className = "browser-view";
@@ -3971,8 +3990,9 @@ function renderDirectory(entries) {
         setExplorerSelection([entry.path], entry.path);
         renderExplorerSelectionState();
       }
-      const useManagedBrowserUpload = shouldUseManagedBrowserUploadDrag();
-      const useNativeExternalDrag = !useManagedBrowserUpload && shouldUseNativeExternalFileDrag(entry);
+      const dragMode = getExplorerDragMode(entry);
+      const useManagedBrowserUpload = dragMode === "managed";
+      const useNativeExternalDrag = dragMode === "native";
       state.draggedExplorerPaths = state.selectedExplorerPaths.has(entry.path)
         ? [...state.selectedExplorerPaths]
         : [entry.path];
