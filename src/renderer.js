@@ -921,8 +921,13 @@ function syncBrowserUploadDropState(preferredTabId = "") {
     renderBrowserUploadOverlay(tab);
     const support = getUploadSupportForTab(tab);
     const needsTargeting = support?.kind === "moodle";
-    const baseActive = nextActiveTabId ? nextActiveTabId === tabId : isSupportedVisible && state.browserUploadArmed;
-    const isActive = baseActive && (!needsTargeting || overlay.classList.contains("targeted"));
+    const isActive = window.FuzitterUploadRouting.shouldActivateUploadOverlay({
+      armed: state.browserUploadArmed,
+      supportedVisible: isSupportedVisible,
+      preferred: Boolean(nextActiveTabId && nextActiveTabId === tabId),
+      needsTargeting,
+      targeted: overlay.classList.contains("targeted"),
+    });
     overlay.classList.toggle("active", isActive);
   });
 }
@@ -940,6 +945,9 @@ function applyBrowserUploadDropzoneBounds(tab, bounds = null) {
     overlay.style.removeProperty("--dropzone-top");
     overlay.style.removeProperty("--dropzone-width");
     overlay.style.removeProperty("--dropzone-height");
+    if (state.browserUploadArmed) {
+      syncBrowserUploadDropState(state.browserUploadDropTabId);
+    }
     return;
   }
 
@@ -948,6 +956,9 @@ function applyBrowserUploadDropzoneBounds(tab, bounds = null) {
   overlay.style.setProperty("--dropzone-top", `${Math.round(bounds.top)}px`);
   overlay.style.setProperty("--dropzone-width", `${Math.round(bounds.width)}px`);
   overlay.style.setProperty("--dropzone-height", `${Math.round(bounds.height)}px`);
+  if (state.browserUploadArmed) {
+    syncBrowserUploadDropState(state.browserUploadDropTabId);
+  }
 }
 
 async function refreshBrowserUploadDropzone(tab) {
@@ -1039,9 +1050,6 @@ async function refreshBrowserUploadDropzone(tab) {
     }
 
     applyBrowserUploadDropzoneBounds(tab, bounds);
-    if (state.browserUploadArmed && state.browserUploadDropTabId === tab.id) {
-      syncBrowserUploadDropState(tab.id);
-    }
     return bounds;
   } catch (_error) {
     if (tab.uploadDropzoneRequestId === requestId) {

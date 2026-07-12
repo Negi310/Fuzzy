@@ -4,7 +4,11 @@ const fs = require("node:fs");
 const path = require("node:path");
 const vm = require("node:vm");
 
-const { getExplorerDragMode, hasNewAttachmentEvidence } = require("../src/upload-routing");
+const {
+  getExplorerDragMode,
+  hasNewAttachmentEvidence,
+  shouldActivateUploadOverlay,
+} = require("../src/upload-routing");
 
 test("ChatGPT always uses the managed upload bridge", () => {
   assert.equal(getExplorerDragMode({ supportKind: "chatgpt", selectedCount: 1 }), "managed");
@@ -22,6 +26,28 @@ test("split view uses managed drag when any visible destination is ChatGPT", () 
     supportKinds: ["moodle", "chatgpt"],
     selectedCount: 1,
   }), "managed");
+});
+
+test("managed drag activates every visible destination after Moodle targeting", () => {
+  assert.equal(shouldActivateUploadOverlay({
+    armed: true,
+    supportedVisible: true,
+    preferred: false,
+    needsTargeting: false,
+  }), true);
+  assert.equal(shouldActivateUploadOverlay({
+    armed: true,
+    supportedVisible: true,
+    preferred: false,
+    needsTargeting: true,
+    targeted: true,
+  }), true);
+  assert.equal(shouldActivateUploadOverlay({
+    armed: true,
+    supportedVisible: true,
+    needsTargeting: true,
+    targeted: false,
+  }), false);
 });
 
 test("non-upload pages keep native single-file drag only", () => {

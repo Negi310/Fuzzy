@@ -39,5 +39,16 @@
     });
   }
 
-  return { getExplorerDragMode, hasNewAttachmentEvidence };
+  function shouldActivateUploadOverlay({
+    armed = false,
+    supportedVisible = false,
+    preferred = false,
+    needsTargeting = false,
+    targeted = false,
+  } = {}) {
+    const baseActive = armed ? supportedVisible : preferred;
+    return baseActive && (!needsTargeting || targeted);
+  }
+
+  return { getExplorerDragMode, hasNewAttachmentEvidence, shouldActivateUploadOverlay };
 });
