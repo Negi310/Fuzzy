@@ -109,9 +109,16 @@ function rankCandidates(courseName, folderNames) {
     .sort((a, b) => b.score - a.score);
 }
 
-module.exports = {
+const similarityApi = {
   levenshtein,
   normalizeCourseName,
   rankCandidates,
   similarityScore,
 };
+
+if (typeof module !== "undefined" && module.exports) {
+  module.exports = similarityApi;
+}
+if (typeof window !== "undefined") {
+  window.FuzitterSimilarity = similarityApi;
+}

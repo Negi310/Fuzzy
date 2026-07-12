@@ -554,25 +554,6 @@ function sanitizeFileName(name) {
 
 function normalizeCourseTitle(title) {
   return String(title || "")
-    .replace(/^\s*コース\s*[:：]\s*/iu, "")
-    .replace(/\s*[|｜]\s*【\s*和歌山大学\s*】\s*$/u, "")
-    .replace(/\s+/g, " ")
-    .replace(/\s*[|:-]\s*Wakayama.*Moodle.*$/i, "")
-    .replace(/\s*[|｜:-]\s*和歌山大学.*Moodle.*$/u, "")
-    .replace(/\s*Moodle\d*\s*$/i, "")
-    .trim();
-  return String(title || "")
-    .replace(/^\s*コース\s*[:：]\s*/i, "")
-    .replace(/\s*[|｜]\s*【?\s*和歌山大学\s*】?\s*$/i, "")
-    .replace(/\s+/g, " ")
-    .replace(/\s*[|:-]\s*Wakayama.*Moodle.*$/i, "")
-    .replace(/\s*[|:-]\s*和歌山大学.*Moodle.*$/i, "")
-    .replace(/\s*Moodle\d*\s*$/i, "")
-    .trim();
-}
-
-function normalizeCourseTitle(title) {
-  return String(title || "")
     .replace(/^\s*\u30b3\u30fc\u30b9\s*[:\uFF1A]\s*/u, "")
     .replace(/\s*(?:(?:\||\uFF5C)\s*)?\u3010\u548c\u6b4c\u5c71\u5927\u5b66\u3011\s*$/u, "")
     .replace(/\s+/g, " ")
@@ -2395,58 +2376,47 @@ function scheduleDashboardTimelinePull() {
           ];
 
           const collect = () => {
-            const eventTitleSelectors = [
-              "h6.event-name.mb-0.pb-1.text-truncate",
-              ".event-name a[href]",
-              ".event-name",
-              "[data-region*='timeline'] a[href*='/mod/assign/view.php']",
-              ".block_timeline a[href*='/mod/assign/view.php']",
-              ".timeline a[href*='/mod/assign/view.php']",
-            ];
-            const eventNames = eventTitleSelectors
-              .flatMap((selector) => [...document.querySelectorAll(selector)])
-              .filter((node, index, array) => node && array.indexOf(node) === index);
-            const findCourseAnchor = (node) => {
-              const scopes = [
-                node?.closest("li, article, .event, .list-group-item, .activity-item, tr, .timeline-event"),
-                node?.closest("[data-region*='timeline']"),
-                node?.parentElement,
-              ].filter(Boolean);
-              for (const scope of scopes) {
-                const match = scope.querySelector("a[href*='/course/view.php?id=']");
-                if (match) {
-                  return match;
-                }
-              }
-              return [...document.querySelectorAll("a[href*='/course/view.php?id=']")].find((anchor) => {
-                const text = String(anchor.textContent || "").replace(/\\s+/g, " ").trim();
-                return text && String(node?.textContent || "").includes(text);
-              }) || null;
-            };
+            const eventContainers = [
+              ...document.querySelectorAll("[data-region='event-list-item']"),
+              ...document.querySelectorAll(".event-name-container"),
+            ].filter((node, index, array) => node && array.indexOf(node) === index);
+            const fallbackEventNames = [
+              ...document.querySelectorAll(".event-name a[href], .event-name"),
+              ...document.querySelectorAll("[data-region*='timeline'] a[href*='/mod/assign/view.php']"),
+            ].filter((node, index, array) => node && array.indexOf(node) === index);
+            const eventNodes = eventContainers.length ? eventContainers : fallbackEventNames;
             const seen = new Set();
-            const items = eventNames.flatMap((eventName) => {
-              const anchor = eventName.matches("a[href]") ? eventName : eventName.querySelector("a[href]");
+            const items = eventNodes.flatMap((eventNode) => {
+              const container = eventNode.closest("[data-region='event-list-item'], li, article, .event, .list-group-item, .activity-item, tr, .timeline-event") || eventNode;
+              const anchor = eventNode.matches("a[href]")
+                ? eventNode
+                : eventNode.querySelector(".event-name a[href], a[href*='/mod/']");
               const href = anchor?.href || "";
-              const ariaSource = eventName.matches("[aria-label]")
-                ? eventName
-                : eventName.querySelector("[aria-label]");
+              const ariaSource = anchor?.matches("[aria-label]")
+                ? anchor
+                : container.querySelector("[aria-label]");
               const label = (
-                ariaSource?.getAttribute("aria-label")
-                || eventName.textContent
+                anchor?.getAttribute("title")
+                || anchor?.textContent
+                || ariaSource?.getAttribute("aria-label")
                 || ""
               ).trim().replace(/\\s+/g, " ");
               if (!href || !label || seen.has(href)) {
                 return [];
               }
               seen.add(href);
-              const container = eventName.closest("li, article, .event, .list-group-item, .activity-item, tr, .timeline-event");
               const nearbyText = (container?.textContent || "").replace(/\\s+/g, " ").trim();
-              const courseAnchor = findCourseAnchor(eventName);
+              const courseAnchor = container.querySelector("a[href*='/course/view.php?id=']");
               const courseUrl = courseAnchor?.href || "";
               const courseMatch = courseUrl.match(/[?&]id=(\\d+)/);
+              const metadataText = (
+                container.querySelector(".event-name-container small.mb-0, small.mb-0, [data-region='event-course-name']")?.textContent
+                || ""
+              ).replace(/\\s+/g, " ").trim();
+              const metadataParts = metadataText.split(/\\s*[·•]\\s*/).filter(Boolean);
               const derivedCourseName = (
                 courseAnchor?.textContent
-                || nearbyText.replace(label, "").trim()
+                || (metadataParts.length > 1 ? metadataParts.at(-1) : "")
               ).replace(/\\s+/g, " ").trim();
               return [{
                 id: href + "::" + label,
@@ -2455,6 +2425,8 @@ function scheduleDashboardTimelinePull() {
                 courseName: derivedCourseName.slice(0, 120),
                 courseId: courseMatch ? courseMatch[1] : "",
                 courseUrl,
+                metadataText,
+                ariaLabel: ariaSource?.getAttribute("aria-label") || "",
                 rawText: nearbyText
               }];
             });
@@ -2477,15 +2449,15 @@ function scheduleDashboardTimelinePull() {
               eventContainerCount: document.querySelectorAll(".event-name-container").length,
               eventNameCount: document.querySelectorAll(".event-name").length,
               timelineRegionCount: document.querySelectorAll("[data-region*='timeline'], .timeline, .block_timeline, [data-block='timeline']").length,
-              eventHeadingCount: eventNames.length,
-              eventHeadingPreview: eventNames.slice(0, 3).map((item) => item.outerHTML.slice(0, 280)),
+              eventHeadingCount: eventNodes.length,
+              eventHeadingPreview: eventNodes.slice(0, 3).map((item) => item.outerHTML.slice(0, 280)),
               items
             };
           };
 
           let snapshot = collect();
           for (let attempt = 0; attempt < 12; attempt += 1) {
-            if (snapshot.eventHeadingCount) {
+            if (snapshot.items.some((item) => /\/mod\/assign\/view\.php/i.test(item.href || ""))) {
               break;
             }
             const timelineRegion = timelineSelectors
@@ -2506,6 +2478,7 @@ function scheduleDashboardTimelinePull() {
           state: "needs-login",
           message: "Background dashboard is showing the login page.",
         };
+        flushPendingTimelineNavigation();
         renderTimeline();
         return;
       }
@@ -2538,6 +2511,7 @@ function scheduleDashboardTimelinePull() {
         state: "error",
         message: "Timeline scrape failed.",
       };
+      flushPendingTimelineNavigation();
       renderTimeline();
     }
   }, 900);
@@ -2568,36 +2542,15 @@ function findMappingForCourse(courseName) {
   }) || null;
 }
 
-function timelineEntryMatchesMapping(entry, mapping) {
-  if (!entry || !mapping) {
-    return false;
-  }
-
-  const entryCourseId = String(entry.courseId || "");
-  const mappingCourseId = String(mapping.courseId || extractCourseIdFromUrl(mapping.courseUrl || ""));
-  if (entryCourseId && mappingCourseId && entryCourseId === mappingCourseId) {
-    return true;
-  }
-
-  const entryCourseName = normalizeCourseTitle(entry.courseName || "");
-  const mappingCourseName = normalizeCourseTitle(mapping.courseName || "");
-  return Boolean(entryCourseName && mappingCourseName && entryCourseName === mappingCourseName);
-}
-
 function findTimelineEntryForMapping(mapping) {
-  if (!mapping) {
-    return null;
-  }
-
-  const visibleEntries = state.timelineEntries.filter((entry) => !shouldHideTimelineEntry(entry));
-  const matchingEntries = visibleEntries.filter((entry) => timelineEntryMatchesMapping(entry, mapping));
-  if (!matchingEntries.length) {
-    return null;
-  }
-
-  const assignmentEntries = matchingEntries.filter((entry) => /\/mod\/assign\/view\.php/i.test(entry.href || ""));
-  return (assignmentEntries.length ? assignmentEntries : matchingEntries)
-    .sort(compareTimelineEntries)[0] || null;
+  return window.FuzitterTimelineMatching.findTimelineSubmissionEntry(
+    state.timelineEntries,
+    mapping,
+    {
+      compareEntries: compareTimelineEntries,
+      shouldHideEntry: shouldHideTimelineEntry,
+    }
+  );
 }
 
 function queueTimelineNavigationForMapping(mapping) {
@@ -2610,12 +2563,24 @@ function queueTimelineNavigationForMapping(mapping) {
     courseId: String(mapping.courseId || extractCourseIdFromUrl(mapping.courseUrl || "")),
     courseName: normalizeCourseTitle(mapping.courseName || ""),
     courseUrl: mapping.courseUrl || "",
+    submissionFolderPath: mapping.submissionFolderPath || "",
+    activeTabId: state.activeTabId || "",
   };
 }
 
 function flushPendingTimelineNavigation() {
   const pending = state.pendingTimelineNavigation;
   if (!pending) {
+    return false;
+  }
+
+  state.pendingTimelineNavigation = null;
+  const activeTab = getActiveTab();
+  if (
+    (pending.activeTabId && activeTab?.id !== pending.activeTabId) ||
+    !isExplorerLinkedTab(activeTab) ||
+    (pending.submissionFolderPath && !isWithinPath(state.currentDir, pending.submissionFolderPath))
+  ) {
     return false;
   }
 
@@ -2629,14 +2594,14 @@ function flushPendingTimelineNavigation() {
     );
   }) || null;
   const timelineEntry = findTimelineEntryForMapping(mapping);
-  if (!timelineEntry) {
+  const targetUrl = timelineEntry?.href || mapping?.courseUrl || pending.courseUrl;
+  if (!targetUrl) {
     return false;
   }
 
-  state.pendingTimelineNavigation = null;
   void navigateCurrentBrowserTab(
-    timelineEntry.href,
-    timelineEntry.title || mapping?.courseName || UI_TEXT.defaultBrowserTitle
+    targetUrl,
+    timelineEntry?.title || mapping?.courseName || pending.courseName || UI_TEXT.defaultBrowserTitle
   );
   return true;
 }
@@ -2657,21 +2622,22 @@ function findMappingForTab(tab) {
 }
 
 function findMappingForPath(targetPath) {
-  const matches = state.mappings.filter((entry) => {
-    const normalizedPath = targetPath.toLowerCase();
-    const candidatePaths = [entry.folderPath, entry.submissionFolderPath]
+  const normalizedPath = targetPath.toLowerCase();
+  const matches = state.mappings.flatMap((entry) =>
+    [entry.folderPath, entry.submissionFolderPath]
       .filter(Boolean)
-      .map((value) => value.toLowerCase());
-    return candidatePaths.some((mappingPath) => (
-      normalizedPath === mappingPath || normalizedPath.startsWith(`${mappingPath}\\`)
-    ));
-  });
+      .map((value) => value.toLowerCase())
+      .filter((mappingPath) => (
+        normalizedPath === mappingPath || normalizedPath.startsWith(`${mappingPath}\\`)
+      ))
+      .map((mappingPath) => ({ entry, matchedPathLength: mappingPath.length }))
+  );
 
   if (!matches.length) {
     return null;
   }
 
-  return matches.sort((left, right) => right.folderPath.length - left.folderPath.length)[0];
+  return matches.sort((left, right) => right.matchedPathLength - left.matchedPathLength)[0].entry;
 }
 
 function findExplorerEntryByPath(targetPath) {
@@ -4105,6 +4071,7 @@ function renderTimeline() {
 
 async function loadDirectory(targetPath, options = {}) {
   const { syncBrowserFromDirectory = false } = options;
+  const syncBrowserTabId = syncBrowserFromDirectory ? state.activeTabId : null;
   const result = await window.fuzzyApi.listDirectory(targetPath);
   state.rootDir = result.rootDir;
   state.currentDir = result.currentDir;
@@ -4112,14 +4079,14 @@ async function loadDirectory(targetPath, options = {}) {
   renderCurrentPath(state.currentDir);
   renderDirectory(result.entries);
 
-  if (syncBrowserFromDirectory) {
+  if (syncBrowserFromDirectory && state.activeTabId === syncBrowserTabId) {
     const mapping = findMappingForPath(result.currentDir);
     if (mapping) {
       const activeTab = getActiveTab();
       const isSubmissionFolder = Boolean(
         mapping.submissionFolderPath && isWithinPath(result.currentDir, mapping.submissionFolderPath)
       );
-      if (isSubmissionFolder) {
+      if (isSubmissionFolder && isExplorerLinkedTab(activeTab)) {
         const timelineEntry = findTimelineEntryForMapping(mapping);
         if (timelineEntry) {
           state.pendingTimelineNavigation = null;
@@ -4131,10 +4098,10 @@ async function loadDirectory(targetPath, options = {}) {
           queueTimelineNavigationForMapping(mapping);
           ensureDashboardLoaded();
           scheduleDashboardTimelinePull();
-        } else if (mapping.courseUrl && activeTab?.kind === "browser" && isExplorerLinkedTab(activeTab) && activeTab.courseUrl !== mapping.courseUrl) {
+        } else if (mapping.courseUrl && activeTab?.kind === "browser" && activeTab.url !== mapping.courseUrl) {
           navigateCurrentBrowserTab(mapping.courseUrl, mapping.courseName || UI_TEXT.defaultBrowserTitle);
         }
-      } else if (mapping.courseUrl && activeTab?.kind === "browser" && isExplorerLinkedTab(activeTab) && activeTab.courseUrl !== mapping.courseUrl) {
+      } else if (!isSubmissionFolder && mapping.courseUrl && activeTab?.kind === "browser" && isExplorerLinkedTab(activeTab) && activeTab.url !== mapping.courseUrl) {
         navigateCurrentBrowserTab(mapping.courseUrl, mapping.courseName || UI_TEXT.defaultBrowserTitle);
       }
       if (isExplorerLinkedTab(activeTab)) {
@@ -4298,7 +4265,7 @@ async function configureSubmissionFolder(mapping, onComplete = null, menuPositio
           submissionFolderPath,
         });
         mergeUpdatedMapping(next);
-        await loadDirectory(next.submissionFolderPath, { syncBrowserFromDirectory: false });
+        await loadDirectory(next.submissionFolderPath, { syncBrowserFromDirectory: true });
         if (onComplete) {
           await onComplete(next);
         }
@@ -5075,7 +5042,7 @@ function wireEvents() {
     });
     mergeUpdatedMapping(next);
     closeSubmissionFolderDialog();
-    await loadDirectory(draft.mapping.folderPath, { syncBrowserFromDirectory: false });
+    await loadDirectory(next.submissionFolderPath, { syncBrowserFromDirectory: true });
     if (draft.onComplete) {
       await draft.onComplete(next);
     }

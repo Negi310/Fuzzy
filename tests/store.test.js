@@ -68,6 +68,33 @@ test("findMappingByPath returns null when no mapped folder matches", () => {
   }
 });
 
+test("findMappingByPath ranks a matching submission folder by its actual path", () => {
+  const { store, cleanup } = createTempStore({
+    rootDir: "C:\\Downloads\\Fuzzy",
+    mappings: [
+      {
+        courseName: "Long course folder",
+        folderPath: "C:\\Downloads\\Fuzzy\\A-very-long-course-folder-name",
+        submissionFolderPath: "C:\\Downloads\\Fuzzy\\Shared",
+      },
+      {
+        courseName: "Specific submission folder",
+        folderPath: "C:\\Downloads\\Fuzzy\\B",
+        submissionFolderPath: "C:\\Downloads\\Fuzzy\\Shared\\Assignments",
+      },
+    ],
+    downloadHistory: [],
+    preferences: {},
+  });
+
+  try {
+    const mapping = store.findMappingByPath("C:\\Downloads\\Fuzzy\\Shared\\Assignments\\Week 1");
+    assert.equal(mapping?.courseName, "Specific submission folder");
+  } finally {
+    cleanup();
+  }
+});
+
 test("store initializes startup auto launch preference when missing", () => {
   const { store, cleanup } = createTempStore({
     rootDir: "C:\\Downloads\\Fuzzy",

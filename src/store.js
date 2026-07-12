@@ -150,20 +150,21 @@ class Store {
 
   findMappingByPath(targetPath) {
     const normalizedTargetPath = String(targetPath || "").toLowerCase();
-    const matches = this.state.mappings.filter((entry) => {
-      const candidatePaths = [entry.folderPath, entry.submissionFolderPath]
+    const matches = this.state.mappings.flatMap((entry) =>
+      [entry.folderPath, entry.submissionFolderPath]
         .filter(Boolean)
-        .map((value) => String(value).toLowerCase());
-      return candidatePaths.some((mappingPath) => (
-        normalizedTargetPath === mappingPath || normalizedTargetPath.startsWith(`${mappingPath}\\`)
-      ));
-    });
+        .map((value) => String(value).toLowerCase())
+        .filter((mappingPath) => (
+          normalizedTargetPath === mappingPath || normalizedTargetPath.startsWith(`${mappingPath}\\`)
+        ))
+        .map((mappingPath) => ({ entry, matchedPathLength: mappingPath.length }))
+    );
 
     if (!matches.length) {
       return null;
     }
 
-    return matches.sort((left, right) => right.folderPath.length - left.folderPath.length)[0];
+    return matches.sort((left, right) => right.matchedPathLength - left.matchedPathLength)[0].entry;
   }
 
   addDownloadHistory(entry) {
