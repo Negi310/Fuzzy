@@ -311,6 +311,7 @@ async function persistKeyBindings() {
     keyBindings: state.keyBindings,
   });
   state.keyBindings = normalizeKeyBindingMap(preferences.keyBindings);
+  syncShortcutBindingsToWebviews();
 }
 
 function findShortcutActionByBinding(binding) {
@@ -318,6 +319,27 @@ function findShortcutActionByBinding(binding) {
     return null;
   }
   return SHORTCUT_ACTIONS.find((action) => state.keyBindings[action.id] === binding) || null;
+}
+
+function getBoundSideMouseBindings() {
+  return Object.values(state.keyBindings).filter((binding) =>
+    ["MouseBack", "MouseForward"].includes(binding.split("+").at(-1))
+  );
+}
+
+function syncShortcutBindingsToWebviews() {
+  const bindings = getBoundSideMouseBindings();
+  for (const tab of state.tabs) {
+    const webview = tab?.webviewEl;
+    if (!webview?.send) {
+      continue;
+    }
+    try {
+      webview.send("shortcut-bindings", bindings);
+    } catch (_error) {
+      // Navigation can temporarily make a webview unavailable.
+    }
+  }
 }
 
 function shouldHandleShortcutInput(input, context = {}) {
@@ -3063,6 +3085,7 @@ function mountBrowserLikeTab(tab, usePreload = true) {
       tabId: tab.id,
       webContentsId,
     });
+    syncShortcutBindingsToWebviews();
     void tryAutoMoodleLogin(webview);
     if (tab.id === state.activeTabId) {
       focusBrowserSurface(tab);
@@ -4001,7 +4024,7 @@ function renderDirectory(entries) {
     row.addEventListener("dragend", () => {
       state.draggedExplorerPaths = [];
       finishBrowserUploadDrag();
-      renderDirectory(state.explorerEntries);
+      renderExplorerSelectionState();
     });
 
     elements.fileList.appendChild(row);

@@ -1,6 +1,9 @@
 const { ipcRenderer } = require("electron");
 const selectors = require("./course-selectors.json");
 
+let lastCourseContextSignature = "";
+let shortcutMouseBindings = new Set();
+
 function debounce(callback, wait) {
   let timeoutId = null;
   return () => {
@@ -118,15 +121,20 @@ function findCourseAnchor() {
     "header a[href*='/course/view.php?id=']",
     "a[href*='/course/view.php?id=']",
   ];
-  const anchors = selectors.flatMap((selector) => [...document.querySelectorAll(selector)]);
-  return anchors.find((anchor) => {
-    try {
-      const parsed = new URL(anchor.href, location.href);
-      return isWakayamaMoodlePage(parsed.toString()) && Boolean(parsed.searchParams.get("id"));
-    } catch (_error) {
-      return false;
+  for (const selector of selectors) {
+    const anchors = document.querySelectorAll(selector);
+    for (const anchor of anchors) {
+      try {
+        const parsed = new URL(anchor.href, location.href);
+        if (isWakayamaMoodlePage(parsed.toString()) && parsed.searchParams.get("id")) {
+          return anchor;
+        }
+      } catch (_error) {
+        // Ignore malformed links and continue with the next candidate.
+      }
     }
-  }) || null;
+  }
+  return null;
 }
 
 function readCourseAnchorContext() {
@@ -179,14 +187,20 @@ function readCourseContext() {
     }
     : fallbackContext;
 
-  safeSendToHost("page-context", {
+  const payload = {
     url: location.href,
     title: document.title,
     pageKind,
     courseName: courseContext.courseName,
     courseId: courseContext.courseId,
     courseUrl: courseContext.courseUrl,
-  });
+  };
+  const signature = JSON.stringify(payload);
+  if (signature === lastCourseContextSignature) {
+    return;
+  }
+  lastCourseContextSignature = signature;
+  safeSendToHost("page-context", payload);
 }
 
 function isDownloadLikeUrl(href) {
@@ -262,7 +276,7 @@ function handleShortcutMouse(event) {
   if (![1, 2, 3, 4].includes(event.button)) {
     return;
   }
-  safeSendToHost("shortcut-input", {
+  const payload = {
     kind: "mouse",
     button: event.button,
     ctrlKey: event.ctrlKey,
@@ -270,7 +284,20 @@ function handleShortcutMouse(event) {
     shiftKey: event.shiftKey,
     metaKey: event.metaKey,
     editable: isEditableElement(event.target),
-  });
+  };
+  const modifiers = [];
+  if (event.ctrlKey) modifiers.push("Ctrl");
+  if (event.altKey) modifiers.push("Alt");
+  if (event.shiftKey) modifiers.push("Shift");
+  if (event.metaKey) modifiers.push("Meta");
+  const buttonToken = event.button === 3 ? "MouseBack" : event.button === 4 ? "MouseForward" : "";
+  const binding = buttonToken ? [...modifiers, buttonToken].join("+") : "";
+  if (!payload.editable && shortcutMouseBindings.has(binding)) {
+    event.preventDefault();
+    event.stopPropagation();
+    event.stopImmediatePropagation?.();
+  }
+  safeSendToHost("shortcut-input", payload);
 }
 
 function reportShortcutFocus(target) {
@@ -278,17 +305,26 @@ function reportShortcutFocus(target) {
     editable: isEditableElement(target),
   });
 }
-const scheduleCourseContextUpdate = debounce(readCourseContext, 200);
+const scheduleCourseContextUpdate = debounce(readCourseContext, 350);
+
+ipcRenderer.on("shortcut-bindings", (_event, bindings = []) => {
+  shortcutMouseBindings = new Set(
+    Array.isArray(bindings)
+      ? bindings.filter((binding) => /(?:^|\+)(?:MouseBack|MouseForward)$/.test(binding))
+      : []
+  );
+});
 
 window.addEventListener("DOMContentLoaded", () => {
   readCourseContext();
 
-  const observer = new MutationObserver(scheduleCourseContextUpdate);
-  observer.observe(document.documentElement, {
-    childList: true,
-    subtree: true,
-    characterData: true,
-  });
+  if (isWakayamaMoodlePage(location.href)) {
+    const observer = new MutationObserver(scheduleCourseContextUpdate);
+    observer.observe(document.documentElement, {
+      childList: true,
+      subtree: true,
+    });
+  }
 
   document.addEventListener("click", () => {
     setTimeout(readCourseContext, 80);
