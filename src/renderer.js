@@ -4526,7 +4526,9 @@ function wireEvents() {
       });
       return;
     }
-    if ((event.ctrlKey || event.metaKey) && !event.shiftKey && event.key.toLowerCase() === "x") {
+    const embeddedBrowserFocused = isEmbeddedBrowserFocused();
+    const usesPrimaryModifier = (event.ctrlKey || event.metaKey) && !event.shiftKey;
+    if (!embeddedBrowserFocused && usesPrimaryModifier && event.key.toLowerCase() === "x") {
       const active = document.activeElement;
       const typing = isEditableTarget(active);
       if (!typing && cutSelectedExplorerEntries()) {
@@ -4534,7 +4536,7 @@ function wireEvents() {
         return;
       }
     }
-    if ((event.ctrlKey || event.metaKey) && !event.shiftKey && event.key.toLowerCase() === "c") {
+    if (!embeddedBrowserFocused && usesPrimaryModifier && event.key.toLowerCase() === "c") {
       const active = document.activeElement;
       const typing = isEditableTarget(active);
       if (!typing && copySelectedExplorerEntries()) {
@@ -4542,7 +4544,7 @@ function wireEvents() {
         return;
       }
     }
-    if ((event.ctrlKey || event.metaKey) && !event.shiftKey && event.key.toLowerCase() === "v") {
+    if (!embeddedBrowserFocused && usesPrimaryModifier && event.key.toLowerCase() === "v") {
       const active = document.activeElement;
       const typing = isEditableTarget(active);
       if (!typing && (state.cutExplorerPaths.length || state.copiedExplorerPaths.length)) {
@@ -4551,7 +4553,7 @@ function wireEvents() {
         return;
       }
     }
-    if ((event.ctrlKey || event.metaKey) && !event.shiftKey && event.key.toLowerCase() === "z") {
+    if (!embeddedBrowserFocused && usesPrimaryModifier && event.key.toLowerCase() === "z") {
       const active = document.activeElement;
       const typing = isEditableTarget(active);
       if (!typing && state.explorerUndoStack.length) {
