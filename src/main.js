@@ -1130,6 +1130,21 @@ function isGoogleOrigin(target = "") {
   }
 }
 
+function isChatGptOrigin(target = "") {
+  try {
+    const parsed = new URL(target);
+    const hostname = parsed.hostname.toLowerCase();
+    return (
+      hostname === "chatgpt.com" ||
+      hostname.endsWith(".chatgpt.com") ||
+      hostname === "openai.com" ||
+      hostname.endsWith(".openai.com")
+    );
+  } catch (_error) {
+    return false;
+  }
+}
+
 function buildExplorerUndoTrashDir() {
   const dirPath = path.join(app.getPath("userData"), "explorer-undo-trash");
   ensureDirectory(dirPath);
@@ -1172,6 +1187,20 @@ function shouldAllowStorageAccessPermission(permission, requestingOrigin = "", d
   ];
 
   return relatedOrigins.some((origin) => isGoogleOrigin(origin));
+}
+
+function shouldAllowClipboardPermission(permission, requestingOrigin = "", details = {}) {
+  if (!["clipboard-read", "clipboard-sanitized-write"].includes(permission)) {
+    return false;
+  }
+
+  const relatedOrigins = [
+    requestingOrigin,
+    details?.requestingOrigin || "",
+    details?.requestingUrl || "",
+  ];
+
+  return relatedOrigins.some((origin) => isChatGptOrigin(origin));
 }
 
 function findCommandOnPath(commandName) {
@@ -2685,10 +2714,14 @@ app.whenReady().then(() => {
   ensureStartupAutoLaunchRegistration();
   fuzzySession = session.fromPartition(FUZITTER_PARTITION);
   fuzzySession.setPermissionCheckHandler((_webContents, permission, requestingOrigin, details) => (
-    shouldAllowStorageAccessPermission(permission, requestingOrigin, details)
+    shouldAllowStorageAccessPermission(permission, requestingOrigin, details) ||
+    shouldAllowClipboardPermission(permission, requestingOrigin, details)
   ));
   fuzzySession.setPermissionRequestHandler((_webContents, permission, callback, details) => {
-    callback(shouldAllowStorageAccessPermission(permission, details?.requestingOrigin || "", details));
+    callback(
+      shouldAllowStorageAccessPermission(permission, details?.requestingOrigin || "", details) ||
+      shouldAllowClipboardPermission(permission, details?.requestingOrigin || "", details)
+    );
   });
   setupAutoUpdater();
 
