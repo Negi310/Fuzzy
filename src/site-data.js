@@ -62,6 +62,7 @@ function cookieDomainMatchesTarget(cookieDomain, target) {
 }
 
 const SITE_STORAGE_TYPES = Object.freeze([
+  "cookies",
   "filesystem",
   "indexdb",
   "localstorage",

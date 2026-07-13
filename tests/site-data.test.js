@@ -27,6 +27,7 @@ test("Gemini and NotebookLM do not match shared Google cookies", () => {
   assert.equal(cookieDomainMatchesTarget(".gemini.google.com", gemini), true);
   assert.equal(cookieDomainMatchesTarget(".google.com", notebooklm), false);
   assert.equal(cookieDomainMatchesTarget(".notebooklm.google.com", notebooklm), true);
+  assert.equal(cookieDomainMatchesTarget("accounts.google.com", notebooklm), false);
 });
 
 test("ChatGPT target does not include shared OpenAI service data", () => {
@@ -85,7 +86,7 @@ test("clearSiteData clears only matching cookies and singular target origins", a
   assert.equal(mock.calls.clearStorageData.length, 1);
   assert.equal(mock.calls.clearStorageData[0].origin, "https://gemini.google.com");
   assert.equal("origins" in mock.calls.clearStorageData[0], false);
-  assert.equal(mock.calls.clearStorageData[0].storages.includes("cookies"), false);
+  assert.equal(mock.calls.clearStorageData[0].storages.includes("cookies"), true);
   assert.equal(mock.calls.clearStorageData[0].storages.includes("cachestorage"), true);
   assert.equal(mock.calls.clearStorageData[0].storages.includes("shadercache"), false);
   assert.equal(mock.calls.flushStorageData, 1);
