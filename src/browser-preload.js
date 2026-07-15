@@ -1,5 +1,6 @@
 const { ipcRenderer } = require("electron");
 const selectors = require("./course-selectors.json");
+const { isSubmissionPageUrl } = require("./timeline-matching");
 
 function debounce(callback, wait) {
   let timeoutId = null;
@@ -129,9 +130,63 @@ function findCourseAnchor() {
   }) || null;
 }
 
+function readCourseIdFromDom() {
+  const roots = [document.body, document.documentElement].filter(Boolean);
+  for (const root of roots) {
+    const value = String(
+      root.dataset?.courseId
+      || root.dataset?.courseid
+      || root.getAttribute?.("data-course-id")
+      || root.getAttribute?.("data-courseid")
+      || ""
+    );
+    if (/^\d+$/.test(value)) {
+      return value;
+    }
+  }
+
+  const bodyClass = String(document.body?.className || "");
+  const classMatch = bodyClass.match(/(?:^|\s)course-(\d+)(?:\s|$)/i);
+  if (classMatch) {
+    return classMatch[1];
+  }
+
+  const courseElement = document.querySelector("[data-courseid], [data-course-id]");
+  const elementValue = String(
+    courseElement?.dataset?.courseId
+    || courseElement?.dataset?.courseid
+    || courseElement?.getAttribute?.("data-course-id")
+    || courseElement?.getAttribute?.("data-courseid")
+    || ""
+  );
+  return /^\d+$/.test(elementValue) ? elementValue : "";
+}
+
+function buildCourseUrl(courseId) {
+  if (!/^\d+$/.test(String(courseId || ""))) {
+    return "";
+  }
+  try {
+    const parsed = new URL(location.href);
+    const markerIndex = parsed.pathname.toLowerCase().lastIndexOf("/mod/");
+    if (markerIndex < 0) {
+      return "";
+    }
+    parsed.pathname = `${parsed.pathname.slice(0, markerIndex)}/course/view.php`;
+    parsed.search = `?id=${encodeURIComponent(courseId)}`;
+    parsed.hash = "";
+    return parsed.toString();
+  } catch (_error) {
+    return "";
+  }
+}
+
 function readCourseAnchorContext() {
   const courseAnchor = findCourseAnchor();
-  if (!courseAnchor) {
+  const anchorCourseUrl = courseAnchor?.href || "";
+  const courseId = extractCourseId(anchorCourseUrl) || readCourseIdFromDom();
+  const courseUrl = anchorCourseUrl || buildCourseUrl(courseId);
+  if (!courseId || !courseUrl) {
     return {
       courseName: "",
       courseId: "",
@@ -139,10 +194,9 @@ function readCourseAnchorContext() {
     };
   }
 
-  const courseUrl = courseAnchor.href || "";
   return {
-    courseName: normalizeTitle(courseAnchor.textContent || "") || fallbackCourseNameFromDom(),
-    courseId: extractCourseId(courseUrl),
+    courseName: normalizeTitle(courseAnchor?.textContent || ""),
+    courseId,
     courseUrl,
   };
 }
@@ -158,7 +212,7 @@ function getMoodlePageKind(targetUrl) {
     if (pathname.endsWith("/course/view.php") && parsed.searchParams.get("id")) {
       return "course";
     }
-    if (pathname.endsWith("/mod/assign/view.php")) {
+    if (isSubmissionPageUrl(targetUrl)) {
       return "submission";
     }
     return "other";

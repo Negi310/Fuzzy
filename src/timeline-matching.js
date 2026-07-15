@@ -36,6 +36,69 @@
     }
   }
 
+  function isCoursePageUrl(targetUrl) {
+    try {
+      const parsed = new URL(String(targetUrl || ""));
+      return parsed.pathname.toLowerCase().endsWith("/course/view.php")
+        && Boolean(parsed.searchParams.get("id"));
+    } catch (_error) {
+      return false;
+    }
+  }
+
+  function isSubmissionPageUrl(targetUrl) {
+    try {
+      const pathname = new URL(String(targetUrl || "")).pathname.toLowerCase();
+      return /\/mod\/assign(?:\/view\.php)?\/?$/.test(pathname);
+    } catch (_error) {
+      return false;
+    }
+  }
+
+  function mergeCourseContext(previous = {}, next = {}) {
+    const pageUrl = String(next.url || previous.url || "");
+    const pageKind = next.pageKind
+      || (isSubmissionPageUrl(pageUrl) ? "submission" : (isCoursePageUrl(pageUrl) ? "course" : ""));
+    const nextCourseUrlCandidate = String(
+      next.courseUrl || (pageKind === "course" ? pageUrl : "")
+    );
+    const nextCourseUrl = isCoursePageUrl(nextCourseUrlCandidate) ? nextCourseUrlCandidate : "";
+    const previousCourseUrl = isCoursePageUrl(previous.courseUrl) ? String(previous.courseUrl) : "";
+    const courseUrl = nextCourseUrl || (pageKind === "submission" ? previousCourseUrl : "");
+    const nextCourseId = nextCourseUrl
+      ? String(next.courseId || extractCourseId(nextCourseUrl))
+      : "";
+    const courseId = nextCourseId || (
+      pageKind === "submission"
+        ? String(previous.courseId || extractCourseId(previousCourseUrl))
+        : ""
+    );
+    const nextCourseName = String(next.courseName || "").trim();
+    const courseName = nextCourseName || (
+      pageKind === "submission" ? String(previous.courseName || "").trim() : ""
+    );
+
+    return { pageKind, courseName, courseId, courseUrl };
+  }
+
+  function findCourseMapping(mappings, context = {}) {
+    const courseUrl = isCoursePageUrl(context.courseUrl) ? String(context.courseUrl) : "";
+    const courseId = courseUrl ? String(context.courseId || extractCourseId(courseUrl)) : "";
+    const courseName = normalizeCourseName(context.courseName || "");
+    return (Array.isArray(mappings) ? mappings : []).find((mapping) => {
+      const mappingCourseId = String(mapping.courseId || extractCourseId(mapping.courseUrl));
+      return (
+        (courseId && mappingCourseId === courseId)
+        || (courseUrl && mapping.courseUrl === courseUrl)
+        || (courseName && normalizeCourseName(mapping.courseName) === courseName)
+      );
+    }) || null;
+  }
+
+  function getEntryCourseName(entry) {
+    return entry?.matchingCourseName || entry?.courseName || "";
+  }
+
   function findTimelineSubmissionEntry(entries, mapping, options = {}) {
     if (!mapping) {
       return null;
@@ -61,10 +124,10 @@
       return null;
     }
     const namedEntries = visibleEntries.filter((entry) => (
-      (!mappingCourseId || !entry.courseId) && normalizeCourseName(entry.courseName || "")
+      (!mappingCourseId || !entry.courseId) && normalizeCourseName(getEntryCourseName(entry))
     ));
     const exactMatches = namedEntries.filter(
-      (entry) => normalizeCourseName(entry.courseName) === mappingCourseName
+      (entry) => normalizeCourseName(getEntryCourseName(entry)) === mappingCourseName
     );
     if (exactMatches.length) {
       return [...exactMatches].sort(compareEntries)[0] || null;
@@ -72,7 +135,7 @@
 
     const entriesByCourse = new Map();
     for (const entry of namedEntries) {
-      const normalizedName = normalizeCourseName(entry.courseName);
+      const normalizedName = normalizeCourseName(getEntryCourseName(entry));
       if (!entriesByCourse.has(normalizedName)) {
         entriesByCourse.set(normalizedName, []);
       }
@@ -95,9 +158,26 @@
     return [...best.courseEntries].sort(compareEntries)[0] || null;
   }
 
+  function resolveTimelineSubmissionTarget(entries, mapping, options = {}) {
+    const entry = findTimelineSubmissionEntry(entries, mapping, options);
+    if (!entry?.href) {
+      return null;
+    }
+    return {
+      href: entry.href,
+      title: entry.title || mapping?.courseName || "",
+      entry,
+    };
+  }
+
   return {
     extractCourseNameFromMetadata,
+    findCourseMapping,
     findTimelineSubmissionEntry,
     isAssignmentEntry,
+    isCoursePageUrl,
+    isSubmissionPageUrl,
+    mergeCourseContext,
+    resolveTimelineSubmissionTarget,
   };
 });
