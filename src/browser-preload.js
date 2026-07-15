@@ -252,6 +252,9 @@ function isDownloadLikeUrl(href) {
 }
 
 function handleLinkContextMenu(event) {
+  if (String(window.getSelection?.()?.toString() || "").trim()) {
+    return;
+  }
   const target = event.target instanceof Element ? event.target : null;
   const anchor = target?.closest("a[href]");
   if (!anchor) {

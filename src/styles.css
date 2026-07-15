@@ -485,6 +485,17 @@ button {
   gap: 8px;
 }
 
+.site-data-reset-actions {
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.site-data-reset-actions .dialog-input {
+  flex: 1 1 220px;
+  min-width: 0;
+  width: auto;
+}
+
 .side-panel {
   position: relative;
   min-width: 0;

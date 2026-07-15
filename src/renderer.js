@@ -124,7 +124,8 @@ const elements = {
   goRootFolderButton: document.querySelector("#go-root-folder-button"),
   rootDirLabel: document.querySelector("#root-dir-label"),
   moodleHomeInput: document.querySelector("#moodle-home-input"),
-  resetAiSessionButton: document.querySelector("#reset-ai-session-button"),
+  siteDataResetSelect: document.querySelector("#site-data-reset-select"),
+  resetSiteDataButton: document.querySelector("#reset-site-data-button"),
   saveMoodleHomeButton: document.querySelector("#save-moodle-home-button"),
   updateStatusLabel: document.querySelector("#update-status-label"),
   checkUpdatesButton: document.querySelector("#check-updates-button"),
@@ -352,6 +353,45 @@ function setMoodleHome(nextUrl) {
   if (elements.moodleHomeInput) {
     elements.moodleHomeInput.value = nextUrl;
   }
+}
+
+function tabMatchesSiteHosts(tab, siteHosts = []) {
+  try {
+    const hostname = new URL(tab?.url || "").hostname.toLowerCase();
+    return siteHosts.some((siteHost) => {
+      const normalizedHost = String(siteHost || "").replace(/^\./, "").toLowerCase();
+      return normalizedHost && (hostname === normalizedHost || hostname.endsWith(`.${normalizedHost}`));
+    });
+  } catch (_error) {
+    return false;
+  }
+}
+
+function reloadSiteTabsIgnoringCache(siteKey, siteHosts) {
+  let reloadedTabs = 0;
+  for (const tab of state.tabs) {
+    if (!tabMatchesSiteHosts(tab, siteHosts) || !tab.webviewEl?.reloadIgnoringCache) {
+      continue;
+    }
+    tab.webviewEl.reloadIgnoringCache();
+    reloadedTabs += 1;
+  }
+  let dashboardUrl = "";
+  try {
+    dashboardUrl = elements.dashboardWebview?.getURL?.() || "";
+  } catch (_error) {
+    // A dashboard navigation can temporarily make getURL unavailable.
+  }
+  if (
+    siteKey === "moodle" &&
+    state.dashboardLoaded &&
+    tabMatchesSiteHosts({ url: dashboardUrl }, siteHosts) &&
+    elements.dashboardWebview?.reloadIgnoringCache
+  ) {
+    elements.dashboardWebview.reloadIgnoringCache();
+    reloadedTabs += 1;
+  }
+  return reloadedTabs;
 }
 
 function getMoodleLoginUrl() {
@@ -4507,7 +4547,9 @@ function wireEvents() {
       });
       return;
     }
-    if ((event.ctrlKey || event.metaKey) && !event.shiftKey && event.key.toLowerCase() === "x") {
+    const embeddedBrowserFocused = isEmbeddedBrowserFocused();
+    const usesPrimaryModifier = (event.ctrlKey || event.metaKey) && !event.shiftKey;
+    if (!embeddedBrowserFocused && usesPrimaryModifier && event.key.toLowerCase() === "x") {
       const active = document.activeElement;
       const typing = isEditableTarget(active);
       if (!typing && cutSelectedExplorerEntries()) {
@@ -4515,7 +4557,7 @@ function wireEvents() {
         return;
       }
     }
-    if ((event.ctrlKey || event.metaKey) && !event.shiftKey && event.key.toLowerCase() === "c") {
+    if (!embeddedBrowserFocused && usesPrimaryModifier && event.key.toLowerCase() === "c") {
       const active = document.activeElement;
       const typing = isEditableTarget(active);
       if (!typing && copySelectedExplorerEntries()) {
@@ -4523,7 +4565,7 @@ function wireEvents() {
         return;
       }
     }
-    if ((event.ctrlKey || event.metaKey) && !event.shiftKey && event.key.toLowerCase() === "v") {
+    if (!embeddedBrowserFocused && usesPrimaryModifier && event.key.toLowerCase() === "v") {
       const active = document.activeElement;
       const typing = isEditableTarget(active);
       if (!typing && (state.cutExplorerPaths.length || state.copiedExplorerPaths.length)) {
@@ -4532,7 +4574,7 @@ function wireEvents() {
         return;
       }
     }
-    if ((event.ctrlKey || event.metaKey) && !event.shiftKey && event.key.toLowerCase() === "z") {
+    if (!embeddedBrowserFocused && usesPrimaryModifier && event.key.toLowerCase() === "z") {
       const active = document.activeElement;
       const typing = isEditableTarget(active);
       if (!typing && state.explorerUndoStack.length) {
@@ -4758,12 +4800,28 @@ function wireEvents() {
     }
   });
 
-  elements.resetAiSessionButton?.addEventListener("click", async () => {
+  elements.resetSiteDataButton?.addEventListener("click", async () => {
+    const siteKey = elements.siteDataResetSelect?.value || "";
+    const siteLabel = elements.siteDataResetSelect?.selectedOptions?.[0]?.textContent || siteKey;
+    if (!siteKey || !window.confirm(`${siteLabel} のCookieとサイトデータを初期化しますか？`)) {
+      return;
+    }
+    elements.resetSiteDataButton.disabled = true;
+    elements.siteDataResetSelect.disabled = true;
     try {
-      const result = await window.fuzzyApi.resetAiSessions();
-      toast(`Gemini / NotebookLM / ChatGPT セッションを初期化しました (${result?.clearedCookies ?? 0} cookies)`, "success");
+      const result = await window.fuzzyApi.resetSiteData(siteKey);
+      const reloadedTabs = reloadSiteTabsIgnoringCache(siteKey, result?.reloadHosts || []);
+      const resultMessage = `${result?.label || siteLabel} を初期化しました (${result?.clearedCookies ?? 0} cookies / ${reloadedTabs} tabs)`;
+      if (result?.ok === false) {
+        toast(`${resultMessage}。${result?.failedOperations || 0} 件の処理に失敗しました`, "warn");
+      } else {
+        toast(resultMessage, "success");
+      }
     } catch (error) {
       toast(error.message, "error");
+    } finally {
+      elements.resetSiteDataButton.disabled = false;
+      elements.siteDataResetSelect.disabled = false;
     }
   });
 

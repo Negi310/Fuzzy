@@ -3,10 +3,12 @@ const { execFileSync, spawn } = require("node:child_process");
 const http = require("node:http");
 const https = require("node:https");
 const path = require("node:path");
-const { app, BrowserWindow, dialog, ipcMain, nativeImage, session, shell, webContents } = require("electron");
+const { app, BrowserWindow, dialog, ipcMain, Menu, nativeImage, session, shell, webContents } = require("electron");
 const { autoUpdater } = require("electron-updater");
 
+const { handleStandardCopyInput } = require("./input-utils");
 const { rankCandidates } = require("./similarity");
+const { clearSiteData, getSiteDataTarget } = require("./site-data");
 const { Store } = require("./store");
 
 const APP_NAME = "Fuzitter";
@@ -44,6 +46,7 @@ const ALLOWED_HOST_PATTERNS = [
 let mainWindow = null;
 let store = null;
 let fuzzySession = null;
+let siteDataResetInFlight = false;
 let isQuittingAfterSessionFlush = false;
 const shortcutForwardedContents = new Set();
 const tabRegistry = new Map();
@@ -493,76 +496,28 @@ function isGoogleWorkspaceUrl(targetUrl) {
   }
 }
 
-function isGoogleSessionHost(hostname = "") {
-  return (
-    hostname === "google.com" ||
-    hostname.endsWith(".google.com") ||
-    hostname.endsWith(".gstatic.com") ||
-    hostname.endsWith(".googleusercontent.com") ||
-    hostname.endsWith(".googleapis.com")
-  );
-}
-
-function isOpenAiSessionHost(hostname = "") {
-  return (
-    hostname === "openai.com" ||
-    hostname.endsWith(".openai.com") ||
-    hostname === "chatgpt.com" ||
-    hostname.endsWith(".chatgpt.com") ||
-    hostname.endsWith(".oaistatic.com") ||
-    hostname.endsWith(".oaiusercontent.com")
-  );
-}
-
-async function resetAiSessions() {
+async function resetSiteData(siteKey) {
+  if (siteDataResetInFlight) {
+    throw new Error("Another site data reset is already running.");
+  }
+  const moodleHome = normalizeMoodleHomeUrl(store.getState().preferences?.moodleHome);
+  const target = getSiteDataTarget(siteKey, { moodleHome });
   if (!fuzzySession) {
-    return { clearedCookies: 0 };
+    throw new Error("Site data session is unavailable.");
   }
 
-  const cookies = await fuzzySession.cookies.get({});
-  let clearedCookies = 0;
-  for (const cookie of cookies) {
-    const domain = String(cookie?.domain || "").replace(/^\./, "").toLowerCase();
-    if (!isGoogleSessionHost(domain) && !isOpenAiSessionHost(domain)) {
-      continue;
-    }
-    const protocol = cookie?.secure ? "https://" : "http://";
-    const cookiePath = String(cookie?.path || "/").startsWith("/") ? String(cookie?.path || "/") : `/${cookie?.path || ""}`;
-    const url = `${protocol}${domain}${cookiePath}`;
-    try {
-      await fuzzySession.cookies.remove(url, cookie.name);
-      clearedCookies += 1;
-    } catch (_error) {
-      // Ignore individual cookie removal failures and continue clearing.
-    }
+  siteDataResetInFlight = true;
+  try {
+    const result = await clearSiteData(fuzzySession, target);
+    return {
+      siteKey: target.key,
+      label: target.label,
+      reloadHosts: target.cookieHosts,
+      ...result,
+    };
+  } finally {
+    siteDataResetInFlight = false;
   }
-
-  await Promise.allSettled([
-    fuzzySession.clearStorageData({
-      origins: [
-        "https://accounts.google.com",
-        "https://notebooklm.google.com",
-        "https://gemini.google.com",
-        "https://chatgpt.com",
-        "https://auth.openai.com",
-        "https://platform.openai.com",
-      ],
-      storages: [
-        "cookies",
-        "filesystem",
-        "indexdb",
-        "localstorage",
-        "serviceworkers",
-        "cachestorage",
-        "shadercache",
-        "websql",
-      ],
-    }),
-    fuzzySession.flushStorageData(),
-    fuzzySession.cookies.flushStore(),
-  ]);
-
-  return { clearedCookies };
 }
 
 function isPdfUrl(targetUrl) {
@@ -1129,6 +1084,21 @@ function isGoogleOrigin(target = "") {
   }
 }
 
+function isChatGptOrigin(target = "") {
+  try {
+    const parsed = new URL(target);
+    const hostname = parsed.hostname.toLowerCase();
+    return (
+      hostname === "chatgpt.com" ||
+      hostname.endsWith(".chatgpt.com") ||
+      hostname === "openai.com" ||
+      hostname.endsWith(".openai.com")
+    );
+  } catch (_error) {
+    return false;
+  }
+}
+
 function buildExplorerUndoTrashDir() {
   const dirPath = path.join(app.getPath("userData"), "explorer-undo-trash");
   ensureDirectory(dirPath);
@@ -1171,6 +1141,20 @@ function shouldAllowStorageAccessPermission(permission, requestingOrigin = "", d
   ];
 
   return relatedOrigins.some((origin) => isGoogleOrigin(origin));
+}
+
+function shouldAllowClipboardPermission(permission, requestingOrigin = "", details = {}) {
+  if (!["clipboard-read", "clipboard-sanitized-write"].includes(permission)) {
+    return false;
+  }
+
+  const relatedOrigins = [
+    requestingOrigin,
+    details?.requestingOrigin || "",
+    details?.requestingUrl || "",
+  ];
+
+  return relatedOrigins.some((origin) => isChatGptOrigin(origin));
 }
 
 function findCommandOnPath(commandName) {
@@ -1631,13 +1615,16 @@ function forwardShortcutInput(payload) {
   }
 }
 
-function attachShortcutForwarding(targetContents) {
+function attachShortcutForwarding(targetContents, { handleEditCommands = false } = {}) {
   if (!targetContents || targetContents.isDestroyed() || shortcutForwardedContents.has(targetContents.id)) {
     return;
   }
 
   shortcutForwardedContents.add(targetContents.id);
-  targetContents.on("before-input-event", (_event, input) => {
+  targetContents.on("before-input-event", (event, input) => {
+    if (handleEditCommands && handleStandardCopyInput(event, input, targetContents)) {
+      return;
+    }
     forwardShortcutInput(buildShortcutInputFromElectron(input));
   });
   targetContents.once("destroyed", () => {
@@ -2681,10 +2668,14 @@ app.whenReady().then(() => {
   ensureStartupAutoLaunchRegistration();
   fuzzySession = session.fromPartition(FUZITTER_PARTITION);
   fuzzySession.setPermissionCheckHandler((_webContents, permission, requestingOrigin, details) => (
-    shouldAllowStorageAccessPermission(permission, requestingOrigin, details)
+    shouldAllowStorageAccessPermission(permission, requestingOrigin, details) ||
+    shouldAllowClipboardPermission(permission, requestingOrigin, details)
   ));
   fuzzySession.setPermissionRequestHandler((_webContents, permission, callback, details) => {
-    callback(shouldAllowStorageAccessPermission(permission, details?.requestingOrigin || "", details));
+    callback(
+      shouldAllowStorageAccessPermission(permission, details?.requestingOrigin || "", details) ||
+      shouldAllowClipboardPermission(permission, details?.requestingOrigin || "", details)
+    );
   });
   setupAutoUpdater();
 
@@ -2702,6 +2693,21 @@ app.whenReady().then(() => {
     });
 
     contents.on("context-menu", (event, params) => {
+      if (String(params.selectionText || "").trim() && params.editFlags?.canCopy) {
+        event.preventDefault();
+        Menu.buildFromTemplate([
+          {
+            label: "コピー",
+            accelerator: "CmdOrCtrl+C",
+            click: () => {
+              if (!contents.isDestroyed()) {
+                contents.copy();
+              }
+            },
+          },
+        ]).popup({ window: mainWindow });
+        return;
+      }
       if (!params.linkURL) {
         return;
       }
@@ -3018,8 +3024,8 @@ ipcMain.handle("app:open-external", async (_event, targetUrl) => {
   return { ok: true };
 });
 
-ipcMain.handle("session:ai:reset", async () => {
-  return await resetAiSessions();
+ipcMain.handle("session:site-data:reset", async (_event, siteKey) => {
+  return await resetSiteData(siteKey);
 });
 
 ipcMain.handle("state:get", async () => buildInitialState());
@@ -3545,7 +3551,7 @@ ipcMain.handle("preview:cleanup", async (_event, targetPath) => {
 
 ipcMain.on("webview:register", (_event, payload) => {
   webContentsToTab.set(payload.webContentsId, payload.tabId);
-  attachShortcutForwarding(webContents.fromId(payload.webContentsId));
+  attachShortcutForwarding(webContents.fromId(payload.webContentsId), { handleEditCommands: true });
 });
 
 ipcMain.on("webview:unregister", (_event, payload) => {
