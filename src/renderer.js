@@ -109,6 +109,7 @@ const state = {
   embeddedBrowserEditable: false,
   browserUploadInFlight: false,
   browserUploadSignature: "",
+  activeDownloads: new Map(),
 };
 
 const elements = {
@@ -175,9 +176,12 @@ const elements = {
   submissionFolderSaveButton: document.querySelector("#submission-folder-save-button"),
   contextMenuBackdrop: document.querySelector("#context-menu-backdrop"),
   contextMenu: document.querySelector("#context-menu"),
+  downloadProgressStack: document.querySelector("#download-progress-stack"),
+  downloadProgressAnnouncer: document.querySelector("#download-progress-announcer"),
 };
 
 const SHORTCUT_ACTION_MAP = new Map(SHORTCUT_ACTIONS.map((action) => [action.id, action]));
+const downloadProgressRemovalTimers = new Map();
 
 function createId(prefix) {
   return `${prefix}-${crypto.randomUUID()}`;
@@ -198,6 +202,103 @@ function escapeHtml(value) {
     .replaceAll(">", "&gt;")
     .replaceAll('"', "&quot;")
     .replaceAll("'", "&#39;");
+}
+
+function getDownloadStatusLabel(download) {
+  if (download.paused) {
+    return "一時停止";
+  }
+  if (download.status === "interrupted") {
+    return "接続待ち";
+  }
+  if (download.type === "completed") {
+    return "完了";
+  }
+  if (download.type === "cancelled") {
+    return "キャンセル";
+  }
+  if (download.type === "interrupted") {
+    return "失敗";
+  }
+  if (download.percent !== null) {
+    return `${Math.round(download.percent)}%`;
+  }
+  return download.purpose === "preview" ? "プレビュー準備中" : "ダウンロード中";
+}
+
+function renderDownloadProgress() {
+  if (!elements.downloadProgressStack) {
+    return;
+  }
+  elements.downloadProgressStack.innerHTML = "";
+  const { visible, hiddenCount } = window.FuzitterDownloadProgress.selectVisibleDownloads(state.activeDownloads, 5);
+  for (const download of visible) {
+    const terminal = window.FuzitterDownloadProgress.isTerminalDownloadState(download.type);
+    const percent = download.type === "completed" ? 100 : download.percent;
+    const item = document.createElement("article");
+    item.className = `download-progress-item download-progress-${download.type}`;
+    item.dataset.downloadId = download.downloadId;
+    item.setAttribute("aria-busy", String(!terminal));
+
+    const byteSummary = download.totalBytes > 0
+      ? `${window.FuzitterDownloadProgress.formatBytes(download.receivedBytes)} / ${window.FuzitterDownloadProgress.formatBytes(download.totalBytes)}`
+      : window.FuzitterDownloadProgress.formatBytes(download.receivedBytes);
+    const progressAttributes = percent === null
+      ? ""
+      : ` aria-valuenow="${Math.round(percent)}" aria-valuemin="0" aria-valuemax="100"`;
+
+    item.innerHTML = `
+      <div class="download-progress-header">
+        <strong class="download-progress-title" title="${escapeHtml(download.fileName)}">${escapeHtml(download.fileName)}</strong>
+        <span class="download-progress-status">${escapeHtml(getDownloadStatusLabel(download))}</span>
+      </div>
+      <div class="download-progress-track ${download.indeterminate ? "indeterminate" : ""}" role="progressbar" aria-label="${escapeHtml(download.fileName)} の進捗"${progressAttributes}>
+        <span class="download-progress-fill" style="${percent === null ? "" : `width: ${percent}%`}"></span>
+      </div>
+      <div class="download-progress-meta">${escapeHtml(byteSummary)}</div>
+    `;
+    elements.downloadProgressStack.appendChild(item);
+  }
+  if (hiddenCount > 0) {
+    const summary = document.createElement("div");
+    summary.className = "download-progress-summary";
+    summary.textContent = `ほか ${hiddenCount} 件をダウンロード中`;
+    elements.downloadProgressStack.appendChild(summary);
+  }
+}
+
+function updateDownloadProgress(payload) {
+  if (!payload?.downloadId) {
+    return false;
+  }
+
+  const existingTimer = downloadProgressRemovalTimers.get(payload.downloadId);
+  if (existingTimer) {
+    clearTimeout(existingTimer);
+    downloadProgressRemovalTimers.delete(payload.downloadId);
+  }
+
+  state.activeDownloads = window.FuzitterDownloadProgress.applyDownloadEvent(state.activeDownloads, payload);
+  renderDownloadProgress();
+
+  const download = state.activeDownloads.get(payload.downloadId);
+  if (elements.downloadProgressAnnouncer && download) {
+    if (payload.type === "started") {
+      elements.downloadProgressAnnouncer.textContent = `${download.fileName} のダウンロードを開始しました`;
+    } else if (window.FuzitterDownloadProgress.isTerminalDownloadState(payload.type)) {
+      elements.downloadProgressAnnouncer.textContent = `${download.fileName}: ${getDownloadStatusLabel(download)}`;
+    }
+  }
+
+  if (window.FuzitterDownloadProgress.isTerminalDownloadState(payload.type)) {
+    const timer = setTimeout(() => {
+      state.activeDownloads.delete(payload.downloadId);
+      downloadProgressRemovalTimers.delete(payload.downloadId);
+      renderDownloadProgress();
+    }, 2800);
+    downloadProgressRemovalTimers.set(payload.downloadId, timer);
+  }
+  return true;
 }
 
 function normalizeKeyBindingMap(rawBindings = {}) {
@@ -1522,9 +1623,11 @@ function applyTabSlideDragStyles() {
 
   const draggedButton = tabButtons[sourceIndex];
   const draggedRect = draggedButton.getBoundingClientRect();
-  const gap = Number.parseFloat(getComputedStyle(elements.browserTabStrip).gap || "0") || 0;
+  const tabStripStyle = getComputedStyle(elements.browserTabStrip);
+  const gap = Number.parseFloat(tabStripStyle.gap || "0") || 0;
+  const overlap = Number.parseFloat(tabStripStyle.getPropertyValue("--browser-tab-overlap") || "0") || 0;
   const dragDistance = drag.currentX - drag.startX;
-  const shiftDistance = draggedRect.width + gap;
+  const shiftDistance = Math.max(draggedRect.width + gap - overlap, 0);
 
   draggedButton.classList.add("dragging");
   draggedButton.style.transform = `translateX(${dragDistance}px)`;
@@ -1930,7 +2033,11 @@ function renderSidePanelVisibility() {
   elements.sidePanel.classList.toggle("hidden", !state.panelVisible);
   elements.workspaceMain.classList.toggle("panel-hidden", !state.panelVisible);
   elements.dockToggleButton.classList.toggle("panel-open", state.panelVisible);
-  elements.dockToggleButton.textContent = state.panelVisible ? "<" : ">";
+  const toggleLabel = state.panelVisible ? "右パネルを閉じる" : "右パネルを開く";
+  elements.dockToggleButton.textContent = state.panelVisible ? ">" : "<";
+  elements.dockToggleButton.setAttribute("aria-expanded", String(state.panelVisible));
+  elements.dockToggleButton.setAttribute("aria-label", toggleLabel);
+  elements.dockToggleButton.title = toggleLabel;
   elements.sidePanelTabActions?.classList.toggle("is-hidden", !state.panelVisible);
   renderBrowserLayout();
 }
@@ -2173,9 +2280,11 @@ function createBrowserTab(url, title = UI_TEXT.defaultBrowserTitle, options = {}
     courseId: "",
     courseUrl: "",
     pageKind: "",
+    isLoading: true,
     contentEl: null,
     webviewEl: null,
     webContentsId: null,
+    loadingBarEl: null,
   };
   state.tabs.push(tab);
   mountTab(tab);
@@ -2220,9 +2329,11 @@ function createRemotePdfTab(pdfUrl, title, sourceTab) {
     courseName: sourceTab?.courseName || "",
     courseId: sourceTab?.courseId || "",
     courseUrl: sourceTab?.courseUrl || sourceTab?.url || "",
+    isLoading: true,
     contentEl: null,
     webviewEl: null,
     webContentsId: null,
+    loadingBarEl: null,
   };
   state.tabs.push(tab);
   mountTab(tab);
@@ -2283,6 +2394,7 @@ function closeTab(tabId) {
 
   tab.webviewEl?.remove();
   tab.webviewEl = null;
+  tab.loadingBarEl = null;
   tab.contentEl?.remove();
   tab.contentEl = null;
   state.tabs = state.tabs.filter((entry) => entry.id !== tabId);
@@ -3061,10 +3173,37 @@ async function ensureCourseMapping(tab) {
   return { needsPrompt: true };
 }
 
+function syncTabLoadingPresentation(tab) {
+  if (!tab) {
+    return;
+  }
+
+  const isLoading = Boolean(tab.isLoading);
+  const tabButton = elements.browserTabStrip.querySelector(`.browser-tab[data-tab-id="${tab.id}"]`);
+  tabButton?.classList.toggle("is-loading", isLoading);
+  tabButton?.setAttribute("aria-busy", String(isLoading));
+  tab.contentEl?.classList.toggle("is-loading", isLoading);
+  tab.contentEl?.setAttribute("aria-busy", String(isLoading));
+  tab.loadingBarEl?.setAttribute("aria-hidden", String(!isLoading));
+}
+
+function setTabLoading(tab, isLoading) {
+  if (!tab) {
+    return;
+  }
+  tab.isLoading = Boolean(isLoading);
+  syncTabLoadingPresentation(tab);
+}
+
 function mountBrowserLikeTab(tab, usePreload = true) {
   const contentEl = document.createElement("div");
   contentEl.className = "browser-surface";
   contentEl.dataset.tabId = tab.id;
+
+  const loadingBar = document.createElement("div");
+  loadingBar.className = "page-loading-bar";
+  loadingBar.setAttribute("role", "progressbar");
+  loadingBar.setAttribute("aria-label", "ページを読み込んでいます");
 
   const uploadSupport = getUploadSupportForTab(tab);
   const uploadOverlay = document.createElement("div");
@@ -3087,6 +3226,20 @@ function mountBrowserLikeTab(tab, usePreload = true) {
   });
   webview.addEventListener("click", () => {
     focusBrowserSurface(tab);
+  });
+
+  webview.addEventListener("did-start-loading", () => {
+    setTabLoading(tab, true);
+  });
+
+  webview.addEventListener("did-stop-loading", () => {
+    setTabLoading(tab, false);
+  });
+
+  webview.addEventListener("did-fail-load", (event) => {
+    if (event.isMainFrame && event.errorCode !== -3) {
+      setTabLoading(tab, false);
+    }
   });
 
   webview.addEventListener("did-finish-load", () => {
@@ -3216,12 +3369,15 @@ function mountBrowserLikeTab(tab, usePreload = true) {
   tab.webviewEl = webview;
   tab.contentEl = contentEl;
   tab.uploadOverlayEl = uploadOverlay;
+  tab.loadingBarEl = loadingBar;
   bindBrowserUploadDropTarget(uploadOverlay, tab);
   bindBrowserUploadDropTarget(contentEl, tab);
   contentEl.appendChild(webview);
   contentEl.appendChild(uploadOverlay);
+  contentEl.appendChild(loadingBar);
   elements.browserContent.appendChild(contentEl);
 
+  syncTabLoadingPresentation(tab);
   renderBrowserLayout();
 }
 
@@ -3827,24 +3983,29 @@ function mountTab(tab) {
 function renderBrowserTabs() {
   elements.browserTabStrip.innerHTML = "";
   for (const tab of state.tabs) {
-    const button = document.createElement("button");
-    button.type = "button";
-    button.className = `browser-tab ${tab.id === state.activeTabId ? "active" : ""}`;
-    button.dataset.tabId = tab.id;
-    button.innerHTML = `
-      <span class="tab-dot ${getTabColor(tab.kind)}"></span>
-      <span class="tab-title">${escapeHtml(tab.title || UI_TEXT.defaultBrowserTitle)}</span>
-      <span class="tab-close" data-close-tab="${tab.id}">×</span>
+    const tabTitle = tab.title || UI_TEXT.defaultBrowserTitle;
+    const tabItem = document.createElement("div");
+    tabItem.className = `browser-tab ${tab.id === state.activeTabId ? "active" : ""} ${tab.isLoading ? "is-loading" : ""}`;
+    tabItem.dataset.tabId = tab.id;
+    tabItem.setAttribute("role", "group");
+    tabItem.setAttribute("aria-busy", String(Boolean(tab.isLoading)));
+    tabItem.setAttribute("aria-label", `${tabTitle} タブ`);
+    tabItem.innerHTML = `
+      <button type="button" class="tab-activate" aria-label="${escapeHtml(tabTitle)} を表示" ${tab.id === state.activeTabId ? 'aria-current="page"' : ""}>
+        <span class="tab-dot ${getTabColor(tab.kind)}" aria-hidden="true"></span>
+        <span class="tab-title">${escapeHtml(tabTitle)}</span>
+      </button>
+      <button type="button" class="tab-close" data-close-tab="${tab.id}" aria-label="${escapeHtml(tabTitle)} を閉じる"><span aria-hidden="true">×</span></button>
     `;
-    button.addEventListener("pointerdown", (event) => {
+    tabItem.addEventListener("pointerdown", (event) => {
       const closeTarget = closestFromEventTarget(event.target, "[data-close-tab]");
       if (event.button !== 0 || closeTarget) {
         return;
       }
-      button.setPointerCapture(event.pointerId);
+      tabItem.setPointerCapture(event.pointerId);
       beginTabSlideDrag(tab.id, event.pointerId, event.clientX);
     });
-    button.addEventListener("auxclick", (event) => {
+    tabItem.addEventListener("auxclick", (event) => {
       if (event.button !== 1) {
         return;
       }
@@ -3852,7 +4013,7 @@ function renderBrowserTabs() {
       event.stopPropagation();
       toggleSplitEditMode();
     });
-    button.addEventListener("contextmenu", (event) => {
+    tabItem.addEventListener("contextmenu", (event) => {
       event.preventDefault();
       event.stopPropagation();
       const items = [
@@ -3874,7 +4035,7 @@ function renderBrowserTabs() {
       }
       showContextMenu(items, event.clientX, event.clientY);
     });
-    elements.browserTabStrip.appendChild(button);
+    elements.browserTabStrip.appendChild(tabItem);
   }
 
   const addButton = document.createElement("button");
@@ -5239,8 +5400,8 @@ window.fuzzyApi.onAppUpdateEvent((payload) => {
 });
 
 window.fuzzyApi.onDownloadEvent(async (payload) => {
+  const hasProgressDisplay = updateDownloadProgress(payload);
   if (payload.type === "started") {
-    toast(`${payload.fileName} を保存中です`, "info");
     if (payload.requiresReview && payload.courseName) {
       const activeTab = getActiveTab();
       if (activeTab?.courseName === payload.courseName) {
@@ -5249,17 +5410,30 @@ window.fuzzyApi.onDownloadEvent(async (payload) => {
     }
     return;
   }
+  if (payload.type === "progress") {
+    return;
+  }
   if (payload.type === "completed") {
-    toast(`${payload.fileName} を保存しました`, "success");
-    await loadDirectory(state.currentDir || state.rootDir, { syncBrowserFromDirectory: false });
+    if (payload.purpose === "save") {
+      toast(`${payload.fileName} を保存しました`, "success");
+      await loadDirectory(state.currentDir || state.rootDir, { syncBrowserFromDirectory: false });
+    }
     return;
   }
   if (payload.type === "blocked") {
     toast(payload.message, "warn");
     return;
   }
+  if (payload.type === "cancelled") {
+    toast(`${payload.fileName || "ファイル"} のダウンロードをキャンセルしました`, "warn");
+    return;
+  }
   if (payload.type === "interrupted") {
-    toast(`${payload.fileName} の保存に失敗しました`, "error");
+    toast(payload.message || `${payload.fileName || "ファイル"} のダウンロードに失敗しました`, "error");
+    return;
+  }
+  if (!hasProgressDisplay && payload.message) {
+    toast(payload.message, "warn");
   }
 });
 
