@@ -113,3 +113,37 @@ test("store initializes startup auto launch preference when missing", () => {
     cleanup();
   }
 });
+
+test("resetSettings restores configurable settings without deleting history", () => {
+  const { store, cleanup } = createTempStore({
+    rootDir: "D:\\Custom\\Fuzitter",
+    mappings: [
+      {
+        courseName: "Course",
+        folderPath: "D:\\Custom\\Fuzitter\\Course",
+      },
+    ],
+    downloadHistory: [{ fileName: "notes.pdf" }],
+    preferences: {
+      dashboardAutoload: true,
+      onboardingCompleted: true,
+      startupAutoLaunchRegistered: true,
+      moodleHome: "https://example.com/moodle/",
+      keyBindings: { reload: "Ctrl+R" },
+    },
+  });
+
+  try {
+    const state = store.resetSettings({ rootDir: "C:\\Downloads\\Fuzitter" });
+    assert.equal(state.rootDir, "C:\\Downloads\\Fuzitter");
+    assert.deepEqual(state.mappings, []);
+    assert.deepEqual(state.downloadHistory, [{ fileName: "notes.pdf" }]);
+    assert.equal(state.preferences.dashboardAutoload, false);
+    assert.deepEqual(state.preferences.keyBindings, {});
+    assert.equal(state.preferences.moodleHome, undefined);
+    assert.equal(state.preferences.onboardingCompleted, true);
+    assert.equal(state.preferences.startupAutoLaunchRegistered, true);
+  } finally {
+    cleanup();
+  }
+});

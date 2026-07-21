@@ -83,6 +83,7 @@
     return {
       ...payload,
       type,
+      status: String(payload.status || ""),
       downloadId: String(payload.downloadId || ""),
       fileName: payload.fileName == null ? "" : String(payload.fileName),
       receivedBytes,

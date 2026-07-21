@@ -1775,6 +1775,20 @@ async function buildInitialState() {
   };
 }
 
+function buildAppDefaults() {
+  const preferences = store.getState().preferences || {};
+  return {
+    moodleHome: normalizeMoodleHomeUrl(preferences.moodleHome || WAKAYAMA_MOODLE_HOME),
+    dashboardAutoload: Boolean(preferences.dashboardAutoload),
+    onboardingCompleted: Boolean(preferences.onboardingCompleted),
+    keyBindings: preferences.keyBindings && typeof preferences.keyBindings === "object"
+      ? { ...preferences.keyBindings }
+      : {},
+    appVersion: app.getVersion(),
+    autoUpdate: getAutoUpdateStatus(),
+  };
+}
+
 async function flushPersistentSession() {
   if (!fuzzySession) {
     return;
@@ -2962,16 +2976,7 @@ app.on("before-quit", (event) => {
     });
 });
 
-ipcMain.handle("app:defaults", () => ({
-  moodleHome: normalizeMoodleHomeUrl(store.getState().preferences?.moodleHome || WAKAYAMA_MOODLE_HOME),
-  dashboardAutoload: Boolean(store.getState().preferences?.dashboardAutoload),
-  onboardingCompleted: Boolean(store.getState().preferences?.onboardingCompleted),
-  keyBindings: store.getState().preferences?.keyBindings && typeof store.getState().preferences.keyBindings === "object"
-    ? { ...store.getState().preferences.keyBindings }
-    : {},
-  appVersion: app.getVersion(),
-  autoUpdate: getAutoUpdateStatus(),
-}));
+ipcMain.handle("app:defaults", () => buildAppDefaults());
 
 ipcMain.handle("app:preferences:update", (_event, payload) => {
   if (typeof payload.dashboardAutoload === "boolean") {
@@ -2986,15 +2991,16 @@ ipcMain.handle("app:preferences:update", (_event, payload) => {
   if (payload.keyBindings && typeof payload.keyBindings === "object" && !Array.isArray(payload.keyBindings)) {
     store.setPreference("keyBindings", { ...payload.keyBindings });
   }
+  return buildAppDefaults();
+});
+
+ipcMain.handle("app:settings:reset", async () => {
+  const defaultRootDir = getDefaultRootDir();
+  ensureDirectory(defaultRootDir);
+  store.resetSettings({ rootDir: defaultRootDir });
   return {
-    moodleHome: normalizeMoodleHomeUrl(store.getState().preferences?.moodleHome || WAKAYAMA_MOODLE_HOME),
-    dashboardAutoload: Boolean(store.getState().preferences?.dashboardAutoload),
-    onboardingCompleted: Boolean(store.getState().preferences?.onboardingCompleted),
-    keyBindings: store.getState().preferences?.keyBindings && typeof store.getState().preferences.keyBindings === "object"
-      ? { ...store.getState().preferences.keyBindings }
-      : {},
-    appVersion: app.getVersion(),
-    autoUpdate: getAutoUpdateStatus(),
+    defaults: buildAppDefaults(),
+    state: await buildInitialState(),
   };
 });
 

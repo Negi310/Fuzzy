@@ -127,6 +127,7 @@ const elements = {
   moodleHomeInput: document.querySelector("#moodle-home-input"),
   siteDataResetSelect: document.querySelector("#site-data-reset-select"),
   resetSiteDataButton: document.querySelector("#reset-site-data-button"),
+  resetAppSettingsButton: document.querySelector("#reset-app-settings-button"),
   saveMoodleHomeButton: document.querySelector("#save-moodle-home-button"),
   updateStatusLabel: document.querySelector("#update-status-label"),
   checkUpdatesButton: document.querySelector("#check-updates-button"),
@@ -164,6 +165,7 @@ const elements = {
   downloadCancelButton: document.querySelector("#download-cancel-button"),
   downloadSaveButton: document.querySelector("#download-save-button"),
   renameDialog: document.querySelector("#rename-dialog"),
+  renameDialogTitle: document.querySelector("#rename-dialog-title"),
   renameForm: document.querySelector("#rename-form"),
   renameCurrentName: document.querySelector("#rename-current-name"),
   renameFileNameInput: document.querySelector("#rename-file-name"),
@@ -2118,8 +2120,8 @@ async function openRenameSelectionAction() {
   if (selectedEntries.length !== 1) {
     toast(
       selectedEntries.length > 1
-        ? "Rename は 1 件だけ選択して実行してください"
-        : "Rename する項目を 1 件選択してください",
+        ? "名前の変更は 1 件だけ選択して実行してください"
+        : "名前を変更する項目を 1 件選択してください",
       "warn"
     );
     return false;
@@ -3532,12 +3534,12 @@ async function openExplorerEntryWith(entry, program) {
     targetPath: entry.path,
     program,
   });
-  toast(`${entry.name} opened in ${program}`, "success");
+  toast(`${entry.name} を ${program} で開きました`, "success");
 }
 
 async function openExplorerExecutable(entry) {
   await window.fuzzyApi.openExplorerExecutable(entry.path);
-  toast(`${entry.name} opened`, "success");
+  toast(`${entry.name} を開きました`, "success");
 }
 
 async function openExplorerEntrySmart(entry) {
@@ -3565,27 +3567,27 @@ async function openExplorerEntrySmart(entry) {
 
 function buildExplorerCreateMenu(parentPath) {
   return {
-    label: "New",
+    label: "新規作成",
     expanded: false,
     children: [
       {
-        label: "Word document",
+        label: "Word 文書",
         action: async () => createExplorerEntry(parentPath, "word"),
       },
       {
-        label: "Excel workbook",
+        label: "Excel ブック",
         action: async () => createExplorerEntry(parentPath, "excel"),
       },
       {
-        label: "PowerPoint presentation",
+        label: "PowerPoint プレゼンテーション",
         action: async () => createExplorerEntry(parentPath, "powerpoint"),
       },
       {
-        label: "Text document",
+        label: "テキスト ドキュメント",
         action: async () => createExplorerEntry(parentPath, "text"),
       },
       {
-        label: "Folder",
+        label: "フォルダー",
         action: async () => createExplorerEntry(parentPath, "folder"),
       },
     ],
@@ -3595,7 +3597,7 @@ function buildExplorerCreateMenu(parentPath) {
 
 function buildExplorerOpenWithMenu(entry) {
   return {
-    label: "別タブで開く",
+    label: "プログラムから開く",
     expanded: false,
     children: [
       {
@@ -3719,8 +3721,10 @@ async function duplicateExplorerEntry(entry) {
 function showRenameDialog(entry, options = {}) {
   const openRenameDialog = async () => {
     await window.fuzzyApi.focusWindow?.();
+    const mode = options.mode === "create" ? "create" : "rename";
     state.renameDraft = {
       ...entry,
+      mode,
       openPathAfterSave: options.openPathAfterSave || "",
       pendingAutoSelect: true,
       openedAt: Date.now(),
@@ -3730,7 +3734,13 @@ function showRenameDialog(entry, options = {}) {
       document.activeElement.blur();
     }
     elements.renameFileNameInput.value = entry.name;
-    elements.renameCurrentName.textContent = `現在の名前: ${entry.name}`;
+    elements.renameDialogTitle.textContent = mode === "create"
+      ? options.dialogTitle || "新規作成"
+      : "名前の変更";
+    elements.renameCurrentName.textContent = mode === "create"
+      ? "作成する名前を入力してください"
+      : `現在の名前: ${entry.name}`;
+    elements.renameSaveButton.textContent = mode === "create" ? "新規作成する" : "変更する";
     elements.renameDialog.showModal();
     void window.fuzzyApi.focusWindow?.().finally(() => {
       focusDialogInput(elements.renameFileNameInput, { select: true, selectFileStem: true });
@@ -3789,22 +3799,29 @@ function openExplorerBackgroundMenu(x, y) {
   if (!targetDir) {
     return;
   }
-  const items = [buildExplorerCreateMenu(targetDir)];
+  const items = [];
+  if (isWithinPath(targetDir, state.rootDir)) {
+    items.push(buildExplorerCreateMenu(targetDir));
+  }
   if (state.cutExplorerPaths.length || state.copiedExplorerPaths.length) {
     items.push({
-      label: "Paste",
+      label: "貼り付け",
       action: async () => pasteCutExplorerEntries(),
     });
   }
-  showContextMenu(items, x, y);
+  if (items.length) {
+    showContextMenu(items, x, y);
+  } else {
+    hideContextMenu();
+  }
 }
 
 function openExplorerEntryMenu(entry, x, y) {
   if (state.selectedExplorerPaths.size > 1 && state.selectedExplorerPaths.has(entry.path)) {
     showContextMenu([
-      { label: "Copy", action: async () => copySelectedExplorerEntries() },
-      { label: "Cut", action: async () => cutSelectedExplorerEntries() },
-      { label: "Delete", tone: "danger", action: async () => deleteExplorerEntries(getSelectedExplorerEntries()) },
+      { label: "コピー", action: async () => copySelectedExplorerEntries() },
+      { label: "切り取り", action: async () => cutSelectedExplorerEntries() },
+      { label: "削除", tone: "danger", action: async () => deleteExplorerEntries(getSelectedExplorerEntries()) },
     ], x, y);
     return;
   }
@@ -3813,24 +3830,24 @@ function openExplorerEntryMenu(entry, x, y) {
     const modernItems = [];
     if (entry.isDirectory) {
       modernItems.push({
-        label: "Open",
+        label: "開く",
         action: () => loadDirectory(entry.path, { syncBrowserFromDirectory: true }),
       });
     } else {
       modernItems.push({
-        label: "Open",
+        label: "開く",
         action: async () => openExplorerEntrySmart(entry),
       });
       modernItems.push({
-        label: "Open in New Tab",
+        label: "新しいタブで開く",
         action: async () => openLocalFileInTab(entry.path, entry.name),
       });
     }
     if (entry.withinRoot !== false) {
-      modernItems.push({ label: "Copy", action: async () => copySelectedExplorerEntries() });
-      modernItems.push({ label: "Cut", action: async () => cutSelectedExplorerEntries() });
-      modernItems.push({ label: "Rename", action: async () => showRenameDialog(entry) });
-      modernItems.push({ label: "Delete", tone: "danger", action: async () => deleteExplorerEntry(entry) });
+      modernItems.push({ label: "コピー", action: async () => copySelectedExplorerEntries() });
+      modernItems.push({ label: "切り取り", action: async () => cutSelectedExplorerEntries() });
+      modernItems.push({ label: "名前の変更", action: async () => showRenameDialog(entry) });
+      modernItems.push({ label: "削除", tone: "danger", action: async () => deleteExplorerEntry(entry) });
       if (!entry.isDirectory) {
         modernItems.push(buildExplorerOpenWithMenu(entry));
       }
@@ -3859,11 +3876,11 @@ function openExplorerEntryMenu(entry, x, y) {
   }
   if (entry.withinRoot !== false) {
     items.push({
-      label: "Copy",
+      label: "コピー",
       action: async () => duplicateExplorerEntry(entry),
     });
     items.push({
-      label: "Rename",
+      label: "名前の変更",
       action: async () => showRenameDialog(entry),
     });
     items.push({
@@ -3982,6 +3999,7 @@ function mountTab(tab) {
 
 function renderBrowserTabs() {
   elements.browserTabStrip.innerHTML = "";
+  let activeTabItem = null;
   for (const tab of state.tabs) {
     const tabTitle = tab.title || UI_TEXT.defaultBrowserTitle;
     const tabItem = document.createElement("div");
@@ -3990,6 +4008,7 @@ function renderBrowserTabs() {
     tabItem.setAttribute("role", "group");
     tabItem.setAttribute("aria-busy", String(Boolean(tab.isLoading)));
     tabItem.setAttribute("aria-label", `${tabTitle} タブ`);
+    tabItem.title = tabTitle;
     tabItem.innerHTML = `
       <button type="button" class="tab-activate" aria-label="${escapeHtml(tabTitle)} を表示" ${tab.id === state.activeTabId ? 'aria-current="page"' : ""}>
         <span class="tab-dot ${getTabColor(tab.kind)}" aria-hidden="true"></span>
@@ -3997,6 +4016,9 @@ function renderBrowserTabs() {
       </button>
       <button type="button" class="tab-close" data-close-tab="${tab.id}" aria-label="${escapeHtml(tabTitle)} を閉じる"><span aria-hidden="true">×</span></button>
     `;
+    if (tab.id === state.activeTabId) {
+      activeTabItem = tabItem;
+    }
     tabItem.addEventListener("pointerdown", (event) => {
       const closeTarget = closestFromEventTarget(event.target, "[data-close-tab]");
       if (event.button !== 0 || closeTarget) {
@@ -4040,11 +4062,18 @@ function renderBrowserTabs() {
 
   const addButton = document.createElement("button");
   addButton.type = "button";
-  addButton.className = "browser-tab";
+  addButton.className = "browser-tab browser-tab-add";
   addButton.dataset.addTab = "true";
+  addButton.title = "新しいタブ";
+  addButton.setAttribute("aria-label", "新しいタブを開く");
   addButton.innerHTML = `<span class="tab-title">＋</span>`;
   elements.browserTabStrip.appendChild(addButton);
   applyTabSlideDragStyles();
+  if (activeTabItem && !state.tabSlideDrag?.started) {
+    requestAnimationFrame(() => {
+      activeTabItem.scrollIntoView({ block: "nearest", inline: "nearest" });
+    });
+  }
 }
 
 function activateTab(tabId, options = {}) {
@@ -4358,6 +4387,33 @@ async function loadDirectory(targetPath, options = {}) {
   renderSubmissionFolderButton();
 }
 
+function applyAppSettingsSnapshot(payload = {}) {
+  const defaults = payload.defaults || {};
+  const initial = payload.state || {};
+  const directory = initial.directory || { currentDir: initial.rootDir || "", entries: [] };
+
+  setMoodleHome(defaults.moodleHome || "");
+  state.dashboardAutoload = Boolean(defaults.dashboardAutoload);
+  state.onboardingCompleted = Boolean(defaults.onboardingCompleted);
+  state.keyBindings = normalizeKeyBindingMap(defaults.keyBindings);
+  state.rootDir = initial.rootDir || "";
+  state.currentDir = directory.currentDir || state.rootDir;
+  state.mappings = Array.isArray(initial.mappings) ? initial.mappings : [];
+  state.pendingMappingCourse = null;
+  state.mappingPromptedCourses.clear();
+
+  elements.rootDirLabel.textContent = state.rootDir || UI_TEXT.rootUnset;
+  elements.onboardingRootDirLabel.textContent = state.rootDir || UI_TEXT.rootUnset;
+  elements.onboardingMoodleHomeInput.value = defaults.moodleHome || "";
+  elements.moodleHomeInput.value = defaults.moodleHome || "";
+  renderCurrentPath(state.currentDir);
+  renderDirectory(directory.entries || []);
+  renderMappings();
+  renderShortcutSettings();
+  renderSubmissionFolderButton();
+  refreshOnboardingState();
+}
+
 async function saveMapping(courseName, folderPath, matchType, courseUrl) {
   const mapping = await window.fuzzyApi.saveMapping({
     courseName: normalizeCourseTitle(courseName),
@@ -4640,22 +4696,8 @@ function wireEvents() {
     event.preventDefault();
     event.stopPropagation();
     if (state.selectedExplorerPaths.size > 0) {
-      showContextMenu([
-        { label: "Copy", action: async () => copySelectedExplorerEntries() },
-        { label: "Cut", action: async () => cutSelectedExplorerEntries() },
-        { label: "Delete", tone: "danger", action: async () => deleteExplorerEntries(getSelectedExplorerEntries()) },
-      ], event.clientX, event.clientY);
-      return;
-    }
-    if (state.selectedExplorerPaths.size > 0) {
-      showContextMenu([
-        {
-          label: "削除",
-          tone: "danger",
-          action: async () => deleteExplorerEntries(getSelectedExplorerEntries()),
-        },
-      ], event.clientX, event.clientY);
-      return;
+      setExplorerSelection([], "");
+      renderExplorerSelectionState();
     }
     openExplorerBackgroundMenu(event.clientX, event.clientY);
   });
@@ -4986,6 +5028,27 @@ function wireEvents() {
     }
   });
 
+  elements.resetAppSettingsButton?.addEventListener("click", async () => {
+    const confirmed = window.confirm(
+      "保存ルート、Moodle URL、コース対応、キー設定を初期状態に戻しますか？\n保存済みファイルとサイトデータは削除されません。"
+    );
+    if (!confirmed) {
+      return;
+    }
+
+    elements.resetAppSettingsButton.disabled = true;
+    try {
+      const snapshot = await window.fuzzyApi.resetAppSettings();
+      stopShortcutRecording();
+      applyAppSettingsSnapshot(snapshot);
+      toast("設定を初期化しました", "success");
+    } catch (error) {
+      toast(error.message, "error");
+    } finally {
+      elements.resetAppSettingsButton.disabled = false;
+    }
+  });
+
   elements.checkUpdatesButton?.addEventListener("click", async () => {
     try {
       const status = await window.fuzzyApi.checkForUpdates();
@@ -5027,13 +5090,14 @@ function wireEvents() {
     await loadDirectory(mapping.createdNewFolder ? state.rootDir : mapping.folderPath, { syncBrowserFromDirectory: false });
     elements.mappingDialog.close();
     if (mapping.createdNewFolder) {
-      const renamed = showRenameDialogForPath(mapping.folderPath);
-      if (renamed && state.renameDraft) {
-        state.renameDraft.openPathAfterSave = mapping.folderPath;
-      }
+      const renamed = showRenameDialogForPath(mapping.folderPath, {
+        mode: "create",
+        dialogTitle: "コースフォルダを新規作成",
+        openPathAfterSave: mapping.folderPath,
+      });
       toast(
         renamed
-          ? "コース用フォルダを作成しました。続けて名前を変更できます"
+          ? "コースフォルダ名を入力してください"
           : "コース用フォルダを作成しました",
         "success",
       );
@@ -5217,6 +5281,9 @@ function wireEvents() {
       return;
     }
     if (nextName === state.renameDraft.name) {
+      if (state.renameDraft.mode === "create") {
+        toast(`${nextName} を新規作成しました`, "success");
+      }
       elements.renameDialog.close();
       return;
     }
@@ -5243,7 +5310,12 @@ function wireEvents() {
       ? renameResult?.path || renameDraft.openPathAfterSave
       : state.currentDir || state.rootDir;
     await loadDirectory(nextDirectory, { syncBrowserFromDirectory: false });
-    toast(`${previousName} の名前を変更しました`, "success");
+    toast(
+      renameDraft.mode === "create"
+        ? `${nextName} を新規作成しました`
+        : `${previousName} の名前を変更しました`,
+      "success"
+    );
   });
   elements.renameForm.addEventListener("submit", (event) => {
     event.preventDefault();
@@ -5254,6 +5326,8 @@ function wireEvents() {
   elements.renameDialog.addEventListener("close", () => {
     setDialogFocusLock(false);
     state.renameDraft = null;
+    elements.renameDialogTitle.textContent = "名前の変更";
+    elements.renameSaveButton.textContent = "変更する";
     elements.renameCurrentName.textContent = "";
     elements.renameFileNameInput.value = "";
   });

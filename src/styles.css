@@ -78,6 +78,7 @@ button {
   gap: 0;
   padding: 1px 4px 0;
   overflow-x: auto;
+  overflow-y: hidden;
   background: linear-gradient(180deg, #eef3f8 0, #fbfdff 100%);
   border-bottom: 1px solid #dde6f0;
 }
@@ -229,8 +230,10 @@ button {
   display: inline-flex;
   align-items: center;
   gap: 4px;
-  min-width: 96px;
+  min-width: 160px;
+  width: 160px;
   max-width: 160px;
+  flex: 0 0 160px;
   padding: 3px 8px;
   border: 1px solid #d6e0eb;
   border-bottom: 0;
@@ -242,6 +245,15 @@ button {
   position: relative;
   transition: transform 160ms ease, box-shadow 160ms ease, background 160ms ease, color 160ms ease;
   touch-action: pan-x;
+}
+
+.browser-tab-add {
+  min-width: 34px;
+  width: 34px;
+  max-width: 34px;
+  flex-basis: 34px;
+  justify-content: center;
+  padding-inline: 6px;
 }
 
 .browser-tab + .browser-tab {
@@ -341,6 +353,11 @@ button {
 
 .tab-close:hover {
   background: #edf2f8;
+}
+
+.tab-close > span {
+  display: inline-block;
+  transform: translateY(-2px);
 }
 
 .tab-activate:focus-visible,
@@ -564,6 +581,7 @@ button {
 
 .secondary-button,
 .ghost-button,
+.danger-button,
 .side-tab-button,
 .filter-chip {
   border: 1px solid #d7e0eb;
@@ -574,12 +592,23 @@ button {
 }
 
 .secondary-button,
-.ghost-button {
+.ghost-button,
+.danger-button {
   padding: 5px 8px;
 }
 
 .ghost-button {
   background: #f8fafc;
+}
+
+.danger-button {
+  border-color: #e6b9b9;
+  background: #fff5f5;
+  color: #b42323;
+}
+
+.danger-button:hover {
+  background: #ffe8e8;
 }
 
 .dialog-input,
@@ -887,6 +916,10 @@ button {
   min-height: 0;
   overflow: auto;
   overscroll-behavior: contain;
+}
+
+.file-list {
+  padding-bottom: max(120px, 22vh);
 }
 
 .file-row {
@@ -1317,6 +1350,53 @@ button {
   background: #fbfdff;
 }
 
+.settings-disclosure {
+  display: block;
+}
+
+.settings-summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  cursor: pointer;
+  color: #223149;
+  font-size: var(--font-size-title);
+  font-weight: 600;
+  list-style: none;
+}
+
+.settings-summary::-webkit-details-marker {
+  display: none;
+}
+
+.settings-summary::after {
+  content: "";
+  width: 8px;
+  height: 8px;
+  flex: 0 0 8px;
+  border-right: 2px solid #718198;
+  border-bottom: 2px solid #718198;
+  transform: rotate(45deg) translate(-2px, -2px);
+  transition: transform 140ms ease;
+}
+
+.settings-disclosure[open] > .settings-summary::after {
+  transform: rotate(225deg) translate(-1px, -1px);
+}
+
+.settings-summary:focus-visible {
+  outline: 2px solid #2163d8;
+  outline-offset: 4px;
+  border-radius: 4px;
+}
+
+.settings-section-content {
+  display: grid;
+  gap: 8px;
+  padding-top: 10px;
+}
+
 .setting-label,
 .dialog-lead,
 .empty-state,
@@ -1677,10 +1757,10 @@ button {
     text-align: right;
   }
 
- .explorer-header-actions .secondary-button {
-   padding: 5px 7px;
-   font-size: 12px;
- }
+  .explorer-header-actions .secondary-button {
+    padding: 5px 7px;
+    font-size: 12px;
+  }
 
   .path-row {
     display: grid;

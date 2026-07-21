@@ -20,3 +20,22 @@ test("site data reset control exists exactly once inside the settings dialog", (
   assert.match(settingsMarkup, /id="reset-site-data-button"/);
 });
 
+test("settings sections are collapsible and include an app settings reset", () => {
+  const settingsStart = indexHtml.indexOf('<dialog id="settings-dialog"');
+  const settingsEnd = indexHtml.indexOf("</dialog>", settingsStart);
+  const settingsMarkup = indexHtml.slice(settingsStart, settingsEnd);
+  const disclosureMatches = settingsMarkup.match(/<details class="settings-section settings-disclosure"/g) || [];
+
+  assert.equal(disclosureMatches.length, 7);
+  assert.match(settingsMarkup, /<summary class="settings-summary">保存ルート<\/summary>/);
+  assert.match(settingsMarkup, /<summary class="settings-summary">キーコンフィグ<\/summary>/);
+  assert.match(settingsMarkup, /id="reset-app-settings-button"/);
+  assert.match(settingsMarkup, /保存済みファイルとサイトデータは削除しません/);
+});
+
+test("right panel display toggle remains available", () => {
+  const matches = indexHtml.match(/id="dock-toggle-button"/g) || [];
+  assert.equal(matches.length, 1);
+  assert.match(indexHtml, /id="dock-toggle-button"[^>]+aria-controls="side-panel"/);
+});
+

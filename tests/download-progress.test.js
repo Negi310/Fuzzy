@@ -34,6 +34,7 @@ test("download events normalize indeterminate and paused states", () => {
     receivedBytes: 128,
     totalBytes: 0,
     paused: true,
+    status: "",
     percent: null,
     indeterminate: true,
   });
@@ -72,6 +73,22 @@ test("terminal download states are recognized and no longer indeterminate", () =
     assert.equal(normalizeDownloadEvent({ type: state, downloadId: state }).indeterminate, false);
   }
   assert.equal(isTerminalDownloadState("progress"), false);
+});
+
+test("terminal events clear transient connection states", () => {
+  let downloads = applyDownloadEvent(new Map(), {
+    type: "progress",
+    status: "interrupted",
+    downloadId: "connection-retry",
+    fileName: "report.pdf",
+  });
+  downloads = applyDownloadEvent(downloads, {
+    type: "interrupted",
+    downloadId: "connection-retry",
+  });
+
+  assert.equal(downloads.get("connection-retry").status, "");
+  assert.equal(downloads.get("connection-retry").type, "interrupted");
 });
 
 test("download byte formatting stays compact", () => {
@@ -129,4 +146,3 @@ test("download list caps visible cards and reports hidden work", () => {
   assert.equal(selection.hiddenCount, 35);
   assert.equal(selection.visible[0].downloadId, "download-0");
 });
-
