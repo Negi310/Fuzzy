@@ -1,5 +1,6 @@
 const fs = require("node:fs");
 const { execFileSync, spawn } = require("node:child_process");
+const { randomUUID } = require("node:crypto");
 const http = require("node:http");
 const https = require("node:https");
 const path = require("node:path");
@@ -7,6 +8,7 @@ const { app, BrowserWindow, dialog, ipcMain, Menu, nativeImage, session, shell, 
 const { autoUpdater } = require("electron-updater");
 
 const { handleStandardCopyInput } = require("./input-utils");
+const { createDownloadProgressTracker } = require("./download-progress");
 const { rankCandidates } = require("./similarity");
 const { clearSiteData, getSiteDataTarget } = require("./site-data");
 const { Store } = require("./store");
@@ -1592,6 +1594,13 @@ function sendToRenderer(channel, payload) {
   }
 }
 
+function createDownloadProgressEmitter(item, metadata = {}) {
+  return createDownloadProgressTracker(item, metadata, {
+    downloadId: randomUUID(),
+    emit: (payload) => sendToRenderer("download:event", payload),
+  });
+}
+
 function buildShortcutInputFromElectron(input) {
   if (!input || input.type !== "keyDown") {
     return null;
@@ -1763,6 +1772,20 @@ async function buildInitialState() {
     mappings: state.mappings,
     downloadHistory: state.downloadHistory,
     directory: await listDirectory(state.rootDir || getRootDir()),
+  };
+}
+
+function buildAppDefaults() {
+  const preferences = store.getState().preferences || {};
+  return {
+    moodleHome: normalizeMoodleHomeUrl(preferences.moodleHome || WAKAYAMA_MOODLE_HOME),
+    dashboardAutoload: Boolean(preferences.dashboardAutoload),
+    onboardingCompleted: Boolean(preferences.onboardingCompleted),
+    keyBindings: preferences.keyBindings && typeof preferences.keyBindings === "object"
+      ? { ...preferences.keyBindings }
+      : {},
+    appVersion: app.getVersion(),
+    autoUpdate: getAutoUpdateStatus(),
   };
 }
 
@@ -2806,41 +2829,22 @@ app.whenReady().then(() => {
   });
 
   fuzzySession.on("will-download", (_event, item, contents) => {
+    let customRequest = null;
+    let progressEmitter = null;
     try {
       const tabId = webContentsToTab.get(contents.id);
       const context = tabRegistry.get(tabId) ?? {};
       const courseName = context.courseName || context.title || "Unsorted";
-      const customRequest = tabId ? shiftCustomDownload(tabId) : null;
-      const resolved = customRequest?.mode === "save" ? resolveMapping(courseName, context.url || "") : null;
+      customRequest = tabId ? shiftCustomDownload(tabId) : null;
+      const actualFileName = item.getFilename() || inferFileNameFromUrl(item.getURL()) || "download";
+      const isCustomSave = customRequest?.mode === "save";
+      const isCustomPreview = customRequest?.mode === "preview";
 
       let finalPath = "";
       let targetFolder = "";
+      let displayFileName = customRequest?.fileName || actualFileName;
 
-      if (customRequest?.mode === "preview") {
-        finalPath = buildPreviewPath(customRequest.fileName || item.getFilename() || inferFileNameFromUrl(item.getURL()) || "download");
-        item.setSavePath(finalPath);
-        item.once("done", (_doneEvent, state) => {
-          if (state === "completed") {
-            customRequest.resolve?.({
-              localPath: finalPath,
-              fileName: path.basename(finalPath),
-            });
-            if (!customRequest.suppressOpen) {
-              openPreviewTarget(contents.id, finalPath, path.basename(finalPath));
-            }
-            return;
-          }
-          customRequest.reject?.(new Error("ファイルのプレビュー準備に失敗しました。"));
-          sendToRenderer("download:event", {
-            type: "blocked",
-            message: "ファイルのプレビュー準備に失敗しました。",
-          });
-        });
-        return;
-      }
-
-      if (customRequest?.mode === "save") {
-        const actualFileName = item.getFilename() || inferFileNameFromUrl(item.getURL()) || "download";
+      if (isCustomSave) {
         const targetFileName = shouldReplacePlaceholderFileName(customRequest.fileName)
           ? actualFileName
           : customRequest.fileName;
@@ -2850,69 +2854,84 @@ app.whenReady().then(() => {
         }
         ensureDirectory(targetFolder);
         finalPath = uniqueFilePath(path.join(targetFolder, sanitizeFileName(targetFileName)));
+        displayFileName = path.basename(finalPath);
       } else {
-        const autoPreviewPath = buildPreviewPath(item.getFilename() || inferFileNameFromUrl(item.getURL()) || "download");
-        item.setSavePath(autoPreviewPath);
-        item.once("done", (_doneEvent, state) => {
-          if (state === "completed") {
-            openPreviewTarget(contents.id, autoPreviewPath, path.basename(autoPreviewPath));
-            return;
-          }
-          sendToRenderer("download:event", {
-            type: "blocked",
-            message: "ファイルのプレビュー準備に失敗しました。",
-          });
-        });
-        return;
-      }
-
-      if (!targetFolder) {
-        targetFolder = resolved.folderPath;
-        ensureDirectory(targetFolder);
-        finalPath = uniqueFilePath(path.join(targetFolder, item.getFilename()));
+        finalPath = buildPreviewPath(displayFileName);
+        targetFolder = path.dirname(finalPath);
       }
 
       item.setSavePath(finalPath);
 
-      store.addDownloadHistory({
-        courseName,
-        sourceUrl: context.url || item.getURL(),
-        targetPath: finalPath,
-        status: "started",
-      });
-
-      sendToRenderer("download:event", {
-        type: "started",
-        courseName,
-        fileName: path.basename(finalPath),
-        savePath: finalPath,
-        tabId,
-        folderPath: targetFolder,
-        suggestions: resolved?.suggestions || [],
-        requiresReview: !customRequest && resolved?.matchType === "new-folder",
-      });
-
-      item.once("done", (_doneEvent, state) => {
+      if (isCustomSave) {
         store.addDownloadHistory({
           courseName,
           sourceUrl: context.url || item.getURL(),
           targetPath: finalPath,
-          status: state,
+          status: "started",
         });
+      }
 
-        sendToRenderer("download:event", {
-          type: state,
-          courseName,
-          fileName: path.basename(finalPath),
-          savePath: finalPath,
-          tabId,
-        });
+      progressEmitter = createDownloadProgressEmitter(item, {
+        courseName,
+        fileName: displayFileName,
+        savePath: finalPath,
+        tabId,
+        folderPath: targetFolder,
+        purpose: isCustomSave ? "save" : "preview",
+        suggestions: [],
+        requiresReview: false,
       });
-    } catch (_error) {
+
+      item.once("done", (_doneEvent, downloadState) => {
+        const completed = downloadState === "completed";
+        const failureMessage = isCustomSave
+          ? "ファイルの保存に失敗しました。"
+          : "ファイルのプレビュー準備に失敗しました。";
+        try {
+          if (isCustomSave) {
+            store.addDownloadHistory({
+              courseName,
+              sourceUrl: context.url || item.getURL(),
+              targetPath: finalPath,
+              status: downloadState,
+            });
+          }
+
+          if (!completed) {
+            customRequest?.reject?.(new Error(failureMessage));
+            return;
+          }
+
+          if (isCustomPreview) {
+            customRequest.resolve?.({
+              localPath: finalPath,
+              fileName: path.basename(finalPath),
+            });
+            if (!customRequest.suppressOpen) {
+              openPreviewTarget(contents.id, finalPath, path.basename(finalPath));
+            }
+          } else if (!isCustomSave) {
+            openPreviewTarget(contents.id, finalPath, path.basename(finalPath));
+          }
+        } finally {
+          progressEmitter.finish(downloadState, {
+            message: completed ? "" : failureMessage,
+          });
+        }
+      });
+    } catch (error) {
+      customRequest?.reject?.(error);
+      progressEmitter?.finish("interrupted", { message: error.message });
       try {
         item.cancel();
       } catch (_cancelError) {
         // Ignore cancellation failures during error recovery.
+      }
+      if (!progressEmitter) {
+        sendToRenderer("download:event", {
+          type: "blocked",
+          message: error.message || "ダウンロードを開始できませんでした。",
+        });
       }
     }
   });
@@ -2957,16 +2976,7 @@ app.on("before-quit", (event) => {
     });
 });
 
-ipcMain.handle("app:defaults", () => ({
-  moodleHome: normalizeMoodleHomeUrl(store.getState().preferences?.moodleHome || WAKAYAMA_MOODLE_HOME),
-  dashboardAutoload: Boolean(store.getState().preferences?.dashboardAutoload),
-  onboardingCompleted: Boolean(store.getState().preferences?.onboardingCompleted),
-  keyBindings: store.getState().preferences?.keyBindings && typeof store.getState().preferences.keyBindings === "object"
-    ? { ...store.getState().preferences.keyBindings }
-    : {},
-  appVersion: app.getVersion(),
-  autoUpdate: getAutoUpdateStatus(),
-}));
+ipcMain.handle("app:defaults", () => buildAppDefaults());
 
 ipcMain.handle("app:preferences:update", (_event, payload) => {
   if (typeof payload.dashboardAutoload === "boolean") {
@@ -2981,15 +2991,16 @@ ipcMain.handle("app:preferences:update", (_event, payload) => {
   if (payload.keyBindings && typeof payload.keyBindings === "object" && !Array.isArray(payload.keyBindings)) {
     store.setPreference("keyBindings", { ...payload.keyBindings });
   }
+  return buildAppDefaults();
+});
+
+ipcMain.handle("app:settings:reset", async () => {
+  const defaultRootDir = getDefaultRootDir();
+  ensureDirectory(defaultRootDir);
+  store.resetSettings({ rootDir: defaultRootDir });
   return {
-    moodleHome: normalizeMoodleHomeUrl(store.getState().preferences?.moodleHome || WAKAYAMA_MOODLE_HOME),
-    dashboardAutoload: Boolean(store.getState().preferences?.dashboardAutoload),
-    onboardingCompleted: Boolean(store.getState().preferences?.onboardingCompleted),
-    keyBindings: store.getState().preferences?.keyBindings && typeof store.getState().preferences.keyBindings === "object"
-      ? { ...store.getState().preferences.keyBindings }
-      : {},
-    appVersion: app.getVersion(),
-    autoUpdate: getAutoUpdateStatus(),
+    defaults: buildAppDefaults(),
+    state: await buildInitialState(),
   };
 });
 
@@ -3177,74 +3188,24 @@ ipcMain.handle("download:start-custom", async (_event, payload) => {
   }
 
   const resolved = await resolveRemoteFileDetails(payload.url);
-  return await new Promise((resolve, reject) => {
-    queueCustomDownload(payload.tabId, {
-      mode: "preview",
-      suppressOpen: true,
-      fileName: sanitizeFileName(
-        payload.fileName && !shouldReplacePlaceholderFileName(payload.fileName)
-          ? payload.fileName
-          : resolved.fileName || inferFileNameFromUrl(payload.url) || "download"
-      ),
-      resolve: (preview) => {
-        try {
-          const finalPath = finalizeSavedFile(
-            preview.localPath,
-            payload.folderPath,
-            payload.fileName && !shouldReplacePlaceholderFileName(payload.fileName)
-              ? payload.fileName
-              : resolved.fileName || "",
-            payload.lessonFolder || "",
-          );
-
-          const context = tabRegistry.get(payload.tabId) ?? {};
-          const courseName = context.courseName || context.title || "Unsorted";
-          sendToRenderer("download:event", {
-            type: "started",
-            courseName,
-            fileName: path.basename(finalPath),
-            savePath: finalPath,
-            tabId: payload.tabId,
-            folderPath: path.dirname(finalPath),
-            suggestions: [],
-            requiresReview: false,
-          });
-
-          store.addDownloadHistory({
-            courseName,
-            sourceUrl: context.url || payload.url,
-            targetPath: finalPath,
-            status: "started",
-          });
-          store.addDownloadHistory({
-            courseName,
-            sourceUrl: context.url || payload.url,
-            targetPath: finalPath,
-            status: "completed",
-          });
-
-          sendToRenderer("download:event", {
-            type: "completed",
-            courseName,
-            fileName: path.basename(finalPath),
-            savePath: finalPath,
-            tabId: payload.tabId,
-          });
-          resolve({ ok: true, savePath: finalPath });
-        } catch (error) {
-          reject(error);
-        }
-      },
-      reject,
-    });
-
-    try {
-      targetContents.downloadURL(resolved.resolvedUrl || payload.url);
-    } catch (error) {
-      shiftCustomDownload(payload.tabId);
-      reject(error);
-    }
+  queueCustomDownload(payload.tabId, {
+    mode: "save",
+    fileName: sanitizeFileName(
+      payload.fileName && !shouldReplacePlaceholderFileName(payload.fileName)
+        ? payload.fileName
+        : resolved.fileName || inferFileNameFromUrl(payload.url) || "download"
+    ),
+    folderPath: payload.folderPath,
+    lessonFolder: payload.lessonFolder || "",
   });
+
+  try {
+    targetContents.downloadURL(resolved.resolvedUrl || payload.url);
+  } catch (error) {
+    shiftCustomDownload(payload.tabId);
+    throw error;
+  }
+  return { queued: true };
 });
 
 ipcMain.handle("explorer:duplicate", async (_event, targetPath) => {

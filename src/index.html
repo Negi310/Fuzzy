@@ -30,7 +30,7 @@
         <aside id="side-panel" class="side-panel">
           <div class="side-panel-inner">
             <div class="side-panel-tabs">
-              <button id="dock-toggle-button" type="button" class="dock-toggle-button" title="右パネルの表示切替" aria-label="右パネルの表示切替"></button>
+              <button id="dock-toggle-button" type="button" class="dock-toggle-button" title="右パネルを閉じる" aria-label="右パネルを閉じる" aria-controls="side-panel" aria-expanded="true"></button>
               <button id="side-tab-explorer" type="button" class="side-tab-button active">エクスプローラー</button>
               <button id="side-tab-timeline" type="button" class="side-tab-button">タイムライン</button>
               <div class="side-panel-tab-actions">
@@ -40,22 +40,22 @@
 
             <section id="explorer-panel" class="panel-view active">
               <div class="explorer-meta">
-              <div class="explorer-header">
-                <div class="course-summary">
-                  <div class="course-summary-label">現在のコース</div>
-                  <div id="active-course-label" class="course-summary-value">未選択</div>
+                <div class="explorer-header">
+                  <div class="course-summary">
+                    <div class="course-summary-label">現在のコース</div>
+                    <div id="active-course-label" class="course-summary-value">未選択</div>
+                  </div>
+                  <div class="explorer-header-actions">
+                    <button id="open-course-page-button" type="button" class="secondary-button">コースページを開く</button>
+                    <button id="open-submission-folder-button" type="button" class="secondary-button">提出フォルダを開く</button>
+                  </div>
                 </div>
-                <div class="explorer-header-actions">
-                  <button id="open-course-page-button" type="button" class="secondary-button">コースページを開く</button>
-                  <button id="open-submission-folder-button" type="button" class="secondary-button">提出フォルダを開く</button>
-                </div>
-              </div>
 
-              <div class="path-row">
-                <span class="path-icon">📁</span>
-                <div id="current-dir-label" class="path-text"></div>
-                <button id="go-root-folder-button" type="button" class="path-root-button">Fuzitter</button>
-              </div>
+                <div class="path-row">
+                  <span class="path-icon">📁</span>
+                  <div id="current-dir-label" class="path-text"></div>
+                  <button id="go-root-folder-button" type="button" class="path-root-button">Fuzitter</button>
+                </div>
 
               </div>
 
@@ -86,59 +86,72 @@
             <button value="cancel" class="ghost-button">閉じる</button>
           </div>
 
-          <section class="settings-section">
-            <label class="setting-label">保存ルート</label>
-            <div id="root-dir-label" class="path-chip"></div>
-            <button id="dialog-choose-root-button" type="button" class="secondary-button">変更</button>
-          </section>
+          <details class="settings-section settings-disclosure" open>
+            <summary class="settings-summary">保存ルート</summary>
+            <div class="settings-section-content">
+              <div id="root-dir-label" class="path-chip"></div>
+              <button id="dialog-choose-root-button" type="button" class="secondary-button">変更</button>
+            </div>
+          </details>
 
-          <section class="settings-section">
-            <label class="setting-label" for="moodle-home-input">Moodle URL</label>
-            <input id="moodle-home-input" class="dialog-input" type="text" />
-            <button id="save-moodle-home-button" type="button" class="secondary-button">保存</button>
-          </section>
+          <details class="settings-section settings-disclosure" open>
+            <summary class="settings-summary">Moodle URL</summary>
+            <div class="settings-section-content">
+              <label class="visually-hidden" for="moodle-home-input">Moodle URL</label>
+              <input id="moodle-home-input" class="dialog-input" type="text" />
+              <button id="save-moodle-home-button" type="button" class="secondary-button">保存</button>
+            </div>
+          </details>
 
-          <section class="settings-section">
-            <div class="dialog-header compact">
-              <h2>サイトデータ</h2>
+          <details class="settings-section settings-disclosure">
+            <summary class="settings-summary">サイトデータ</summary>
+            <div class="settings-section-content">
+              <p class="dialog-help">表示やサインインに問題があるサイトだけを選び、Cookie とサイトデータを初期化します。他のサイトと Google 共通ログインのデータは維持されます。</p>
+              <div class="dialog-inline-actions site-data-reset-actions">
+                <select id="site-data-reset-select" class="dialog-input" aria-label="初期化するサイト">
+                  <option value="moodle">Moodle</option>
+                  <option value="chatgpt">ChatGPT</option>
+                  <option value="gemini">Gemini</option>
+                  <option value="notebooklm">NotebookLM</option>
+                </select>
+                <button id="reset-site-data-button" type="button" class="secondary-button">選択サイトを初期化</button>
+              </div>
             </div>
-            <p class="dialog-help">表示やサインインに問題があるサイトだけを選び、Cookie とサイトデータを初期化します。他のサイトと Google 共通ログインのデータは維持されます。</p>
-            <div class="dialog-inline-actions site-data-reset-actions">
-              <select id="site-data-reset-select" class="dialog-input" aria-label="初期化するサイト">
-                <option value="moodle">Moodle</option>
-                <option value="chatgpt">ChatGPT</option>
-                <option value="gemini">Gemini</option>
-                <option value="notebooklm">NotebookLM</option>
-              </select>
-              <button id="reset-site-data-button" type="button" class="secondary-button">選択サイトを初期化</button>
-            </div>
-          </section>
+          </details>
 
-          <section class="settings-section">
-            <div class="dialog-header compact">
-              <h2>更新</h2>
+          <details class="settings-section settings-disclosure">
+            <summary class="settings-summary">更新</summary>
+            <div class="settings-section-content">
+              <div id="update-status-label" class="path-chip">起動後に更新状況を確認します</div>
+              <div class="dialog-inline-actions">
+                <button id="check-updates-button" type="button" class="secondary-button">更新を確認</button>
+                <button id="install-update-button" type="button" class="secondary-button" disabled>再起動して更新</button>
+              </div>
             </div>
-            <div id="update-status-label" class="path-chip">起動後に更新状況を確認します</div>
-            <div class="dialog-inline-actions">
-              <button id="check-updates-button" type="button" class="secondary-button">更新を確認</button>
-              <button id="install-update-button" type="button" class="secondary-button" disabled>再起動して更新</button>
-            </div>
-          </section>
+          </details>
 
-          <section class="settings-section">
-            <div class="dialog-header compact">
-              <h2>コース対応</h2>
+          <details class="settings-section settings-disclosure">
+            <summary class="settings-summary">コース対応</summary>
+            <div class="settings-section-content">
+              <div id="mapping-list" class="mapping-list"></div>
             </div>
-            <div id="mapping-list" class="mapping-list"></div>
-          </section>
+          </details>
 
-          <section class="settings-section">
-            <div class="dialog-header compact">
-              <h2>キーコンフィグ</h2>
+          <details class="settings-section settings-disclosure">
+            <summary class="settings-summary">キーコンフィグ</summary>
+            <div class="settings-section-content">
+              <p class="dialog-help">入力欄を選んでから、割り当てたいキーやマウスのサイドボタンを押してください。</p>
+              <div id="shortcut-list" class="shortcut-list"></div>
             </div>
-            <p class="dialog-help">入力欄を選んでから、割り当てたいキーやマウスのサイドボタンを押してください。</p>
-            <div id="shortcut-list" class="shortcut-list"></div>
-          </section>
+          </details>
+
+          <details class="settings-section settings-disclosure">
+            <summary class="settings-summary">設定の初期化</summary>
+            <div class="settings-section-content">
+              <p class="dialog-help">保存ルート、Moodle URL、コース対応、キー設定を初期状態に戻します。保存済みファイルとサイトデータは削除しません。</p>
+              <button id="reset-app-settings-button" type="button" class="danger-button">設定を初期化</button>
+            </div>
+          </details>
         </form>
       </dialog>
 
@@ -219,7 +232,7 @@
       <dialog id="rename-dialog" class="download-dialog">
         <form id="rename-form" method="dialog" class="download-form">
           <div class="dialog-header">
-            <h2>名前の変更</h2>
+            <h2 id="rename-dialog-title">名前の変更</h2>
           </div>
 
           <section class="settings-section">
@@ -257,11 +270,18 @@
       <div id="context-menu-backdrop" class="context-menu-backdrop hidden" aria-hidden="true"></div>
       <div id="context-menu" class="context-menu hidden" role="menu" aria-hidden="true"></div>
       <webview id="dashboard-webview" class="dashboard-webview" partition="persist:fuzitter"></webview>
+      <section
+        id="download-progress-stack"
+        class="download-progress-stack"
+        aria-label="ダウンロード状況"
+      ></section>
+      <div id="download-progress-announcer" class="visually-hidden" aria-live="polite" aria-atomic="true"></div>
       <div id="toast-stack" class="toast-stack"></div>
     </div>
 
     <script src="./similarity.js"></script>
     <script src="./timeline-matching.js"></script>
+    <script src="./download-progress.js"></script>
     <script src="./renderer.js"></script>
   </body>
 </html>
