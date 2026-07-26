@@ -1770,19 +1770,25 @@ button {
   .dock-toggle-button,
   .dock-toggle-button:hover,
   .dock-toggle-button.panel-open {
-    position: fixed;
-    top: auto;
-    left: 12px;
+    position: absolute;
+    top: 0;
+    left: 0;
     right: auto;
-    bottom: calc(clamp(220px, 38vh, 360px) - 1px);
-    width: 38px;
-    height: 22px;
-    border: 1px solid #cbd8e6;
-    border-bottom: 0;
-    border-radius: 18px 18px 0 0;
-    background: #ffffff;
-    transform: translateY(100%);
+    bottom: auto;
+    width: 36px;
+    height: 34px;
+    border: 0;
+    border-right: 1px solid #cbd8e6;
+    border-radius: 0;
+    background: transparent;
+    box-shadow: none;
+    transform: none;
     z-index: 5;
+  }
+
+  .dock-toggle-button:hover,
+  .dock-toggle-button.panel-open:hover {
+    background: #eef4ff;
   }
 
   .dock-toggle-button.panel-open::before {
@@ -1792,6 +1798,7 @@ button {
   .side-panel.hidden .dock-toggle-button,
   .side-panel.hidden .dock-toggle-button:hover {
     position: fixed;
+    top: auto;
     left: 12px;
     right: auto;
     bottom: 10px;

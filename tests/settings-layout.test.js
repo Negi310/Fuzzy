@@ -41,6 +41,7 @@ test("right panel display toggle remains available", () => {
   assert.match(indexHtml, /id="dock-toggle-button"[^>]+aria-controls="side-panel"/);
   assert.doesNotMatch(rendererSource, /dockToggleButton\.textContent/);
   assert.match(stylesSource, /\.dock-toggle-button::before/);
+  assert.match(stylesSource, /@media \(max-width: 1120px\)[\s\S]*?\.dock-toggle-button,[\s\S]*?position: absolute;[\s\S]*?top: 0;[\s\S]*?left: 0;/);
   assert.match(stylesSource, /@media \(max-width: 1120px\)[\s\S]*?\.side-panel\.hidden \.dock-toggle-button[\s\S]*?bottom: 10px/);
 });
 
