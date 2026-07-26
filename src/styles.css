@@ -1777,10 +1777,9 @@ button {
     bottom: auto;
     width: 36px;
     height: 34px;
-    border: 0;
-    border-right: 1px solid #cbd8e6;
-    border-radius: 0;
-    background: transparent;
+    border: 1px solid #cbd8e6;
+    border-radius: 0 0 6px 0;
+    background: #ffffff;
     box-shadow: none;
     transform: none;
     z-index: 5;
