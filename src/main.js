@@ -3004,6 +3004,14 @@ ipcMain.handle("app:settings:reset", async () => {
   };
 });
 
+ipcMain.handle("app:restart", () => {
+  setTimeout(() => {
+    app.relaunch();
+    app.exit(0);
+  }, 50);
+  return { ok: true };
+});
+
 ipcMain.handle("app:focus-window", () => focusMainWindow());
 
 ipcMain.handle("app:update:check", async () => {

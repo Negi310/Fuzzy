@@ -2036,7 +2036,6 @@ function renderSidePanelVisibility() {
   elements.workspaceMain.classList.toggle("panel-hidden", !state.panelVisible);
   elements.dockToggleButton.classList.toggle("panel-open", state.panelVisible);
   const toggleLabel = state.panelVisible ? "右パネルを閉じる" : "右パネルを開く";
-  elements.dockToggleButton.textContent = state.panelVisible ? ">" : "<";
   elements.dockToggleButton.setAttribute("aria-expanded", String(state.panelVisible));
   elements.dockToggleButton.setAttribute("aria-label", toggleLabel);
   elements.dockToggleButton.title = toggleLabel;
@@ -4996,7 +4995,6 @@ function wireEvents() {
       state.onboardingCompleted = true;
       elements.moodleHomeInput.value = preferences.moodleHome;
       elements.onboardingDialog?.close();
-      openTutorialPdf();
       toast("初回設定を保存しました", "success");
     } catch (error) {
       toast(error.message, "error");
@@ -5041,7 +5039,8 @@ function wireEvents() {
       const snapshot = await window.fuzzyApi.resetAppSettings();
       stopShortcutRecording();
       applyAppSettingsSnapshot(snapshot);
-      toast("設定を初期化しました", "success");
+      toast("設定を初期化しました。アプリを再起動します", "success");
+      await window.fuzzyApi.restartApp();
     } catch (error) {
       toast(error.message, "error");
     } finally {
