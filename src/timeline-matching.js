@@ -46,6 +46,16 @@
     }
   }
 
+  function isCourseSectionPageUrl(targetUrl) {
+    try {
+      const parsed = new URL(String(targetUrl || ""));
+      return parsed.pathname.toLowerCase().endsWith("/course/section.php")
+        && Boolean(parsed.searchParams.get("id"));
+    } catch (_error) {
+      return false;
+    }
+  }
+
   function isSubmissionPageUrl(targetUrl) {
     try {
       const pathname = new URL(String(targetUrl || "")).pathname.toLowerCase();
@@ -58,24 +68,29 @@
   function mergeCourseContext(previous = {}, next = {}) {
     const pageUrl = String(next.url || previous.url || "");
     const pageKind = next.pageKind
-      || (isSubmissionPageUrl(pageUrl) ? "submission" : (isCoursePageUrl(pageUrl) ? "course" : ""));
+      || (
+        isSubmissionPageUrl(pageUrl)
+          ? "submission"
+          : (isCourseSectionPageUrl(pageUrl) ? "section" : (isCoursePageUrl(pageUrl) ? "course" : ""))
+      );
     const nextCourseUrlCandidate = String(
       next.courseUrl || (pageKind === "course" ? pageUrl : "")
     );
     const nextCourseUrl = isCoursePageUrl(nextCourseUrlCandidate) ? nextCourseUrlCandidate : "";
     const previousCourseUrl = isCoursePageUrl(previous.courseUrl) ? String(previous.courseUrl) : "";
-    const courseUrl = nextCourseUrl || (pageKind === "submission" ? previousCourseUrl : "");
+    const preservesCourseContext = pageKind === "submission" || pageKind === "section";
+    const courseUrl = nextCourseUrl || (preservesCourseContext ? previousCourseUrl : "");
     const nextCourseId = nextCourseUrl
       ? String(next.courseId || extractCourseId(nextCourseUrl))
       : "";
     const courseId = nextCourseId || (
-      pageKind === "submission"
+      preservesCourseContext
         ? String(previous.courseId || extractCourseId(previousCourseUrl))
         : ""
     );
     const nextCourseName = String(next.courseName || "").trim();
     const courseName = nextCourseName || (
-      pageKind === "submission" ? String(previous.courseName || "").trim() : ""
+      preservesCourseContext ? String(previous.courseName || "").trim() : ""
     );
 
     return { pageKind, courseName, courseId, courseUrl };
@@ -176,6 +191,7 @@
     findTimelineSubmissionEntry,
     isAssignmentEntry,
     isCoursePageUrl,
+    isCourseSectionPageUrl,
     isSubmissionPageUrl,
     mergeCourseContext,
     resolveTimelineSubmissionTarget,

@@ -90,3 +90,19 @@ test("assignment page prefers the breadcrumb course context", () => {
   assert.equal(sentMessages[0].payload.courseName, "Artificial Intelligence");
   assert.equal(sentMessages[0].payload.courseId, "404");
 });
+
+test("course section page derives its course context and is not treated as a submission", () => {
+  const { context, sentMessages } = loadBrowserPreload({
+    url: "https://moodle2026.wakayama-u.ac.jp/2026/course/section.php?id=88",
+    bodyClass: "path-course-view course-404",
+  });
+
+  context.readCourseContext();
+
+  assert.equal(sentMessages[0].payload.pageKind, "section");
+  assert.equal(sentMessages[0].payload.courseId, "404");
+  assert.equal(
+    sentMessages[0].payload.courseUrl,
+    "https://moodle2026.wakayama-u.ac.jp/2026/course/view.php?id=404"
+  );
+});

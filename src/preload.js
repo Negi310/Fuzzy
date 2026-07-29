@@ -3,6 +3,8 @@ const { contextBridge, ipcRenderer } = require("electron");
 contextBridge.exposeInMainWorld("fuzzyApi", {
   getDefaults: () => ipcRenderer.invoke("app:defaults"),
   updatePreferences: (payload) => ipcRenderer.invoke("app:preferences:update", payload),
+  resetAppSettings: () => ipcRenderer.invoke("app:settings:reset"),
+  restartApp: () => ipcRenderer.invoke("app:restart"),
   openExternalUrl: (targetUrl) => ipcRenderer.invoke("app:open-external", targetUrl),
   focusWindow: () => ipcRenderer.invoke("app:focus-window"),
   resetSiteData: (siteKey) => ipcRenderer.invoke("session:site-data:reset", siteKey),

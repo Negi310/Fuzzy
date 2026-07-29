@@ -1,6 +1,16 @@
 const fs = require("node:fs");
 const path = require("node:path");
 
+function createDefaultPreferences(overrides = {}) {
+  return {
+    dashboardAutoload: false,
+    onboardingCompleted: false,
+    startupAutoLaunchRegistered: false,
+    keyBindings: {},
+    ...overrides,
+  };
+}
+
 function normalizeCourseName(name) {
   return String(name || "")
     .replace(/^\s*\u30b3\u30fc\u30b9\s*[:\uFF1A]\s*/u, "")
@@ -57,12 +67,7 @@ class Store {
         rootDir: "",
         mappings: [],
         downloadHistory: [],
-        preferences: {
-          dashboardAutoload: false,
-          onboardingCompleted: false,
-          startupAutoLaunchRegistered: false,
-          keyBindings: {},
-        },
+        preferences: createDefaultPreferences(),
       };
     }
   }
@@ -73,12 +78,13 @@ class Store {
   }
 
   getState() {
-    this.state.preferences ??= {
-      dashboardAutoload: false,
-      onboardingCompleted: false,
-      startupAutoLaunchRegistered: false,
-      keyBindings: {},
-    };
+    this.state.preferences = createDefaultPreferences(
+      this.state.preferences && typeof this.state.preferences === "object"
+        ? this.state.preferences
+        : {}
+    );
+    this.state.mappings = Array.isArray(this.state.mappings) ? this.state.mappings : [];
+    this.state.downloadHistory = Array.isArray(this.state.downloadHistory) ? this.state.downloadHistory : [];
     if (typeof this.state.preferences.onboardingCompleted !== "boolean") {
       this.state.preferences.onboardingCompleted = false;
     }
@@ -180,6 +186,21 @@ class Store {
     this.state.preferences ??= {};
     this.state.preferences[key] = value;
     this.save();
+  }
+
+  resetSettings({ rootDir = "" } = {}) {
+    const currentPreferences = this.state.preferences && typeof this.state.preferences === "object"
+      ? this.state.preferences
+      : {};
+
+    this.state.rootDir = String(rootDir || "");
+    this.state.mappings = [];
+    this.state.preferences = createDefaultPreferences({
+      onboardingCompleted: false,
+      startupAutoLaunchRegistered: Boolean(currentPreferences.startupAutoLaunchRegistered),
+    });
+    this.save();
+    return this.getState();
   }
 
   setSubmissionFolder(criteria = {}, submissionFolderPath = "") {

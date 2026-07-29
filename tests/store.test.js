@@ -113,3 +113,23 @@ test("store initializes startup auto launch preference when missing", () => {
     cleanup();
   }
 });
+
+test("resetSettings requires onboarding again after restart", () => {
+  const { store, cleanup } = createTempStore({
+    rootDir: "C:\\Downloads\\Fuzzy",
+    mappings: [{ courseName: "既存コース", folderPath: "C:\\Downloads\\Fuzzy\\既存コース" }],
+    downloadHistory: [],
+    preferences: {
+      dashboardAutoload: true,
+      onboardingCompleted: true,
+    },
+  });
+
+  try {
+    const state = store.resetSettings({ rootDir: "C:\\Downloads\\Fuzzy" });
+    assert.equal(state.preferences.onboardingCompleted, false);
+    assert.deepEqual(state.mappings, []);
+  } finally {
+    cleanup();
+  }
+});

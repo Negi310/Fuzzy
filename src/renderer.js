@@ -109,6 +109,7 @@ const state = {
   embeddedBrowserEditable: false,
   browserUploadInFlight: false,
   browserUploadSignature: "",
+  activeDownloads: new Map(),
 };
 
 const elements = {
@@ -126,6 +127,7 @@ const elements = {
   moodleHomeInput: document.querySelector("#moodle-home-input"),
   siteDataResetSelect: document.querySelector("#site-data-reset-select"),
   resetSiteDataButton: document.querySelector("#reset-site-data-button"),
+  resetAppSettingsButton: document.querySelector("#reset-app-settings-button"),
   saveMoodleHomeButton: document.querySelector("#save-moodle-home-button"),
   updateStatusLabel: document.querySelector("#update-status-label"),
   checkUpdatesButton: document.querySelector("#check-updates-button"),
@@ -148,6 +150,7 @@ const elements = {
   onboardingRootDirLabel: document.querySelector("#onboarding-root-dir-label"),
   onboardingChooseRootButton: document.querySelector("#onboarding-choose-root-button"),
   onboardingCompleteButton: document.querySelector("#onboarding-complete-button"),
+  onboardingTutorialButton: document.querySelector("#onboarding-tutorial-button"),
   mappingCourseLabel: document.querySelector("#mapping-course-label"),
   mappingSuggestions: document.querySelector("#mapping-suggestions"),
   dashboardWebview: document.querySelector("#dashboard-webview"),
@@ -163,6 +166,7 @@ const elements = {
   downloadCancelButton: document.querySelector("#download-cancel-button"),
   downloadSaveButton: document.querySelector("#download-save-button"),
   renameDialog: document.querySelector("#rename-dialog"),
+  renameDialogTitle: document.querySelector("#rename-dialog-title"),
   renameForm: document.querySelector("#rename-form"),
   renameCurrentName: document.querySelector("#rename-current-name"),
   renameFileNameInput: document.querySelector("#rename-file-name"),
@@ -175,9 +179,12 @@ const elements = {
   submissionFolderSaveButton: document.querySelector("#submission-folder-save-button"),
   contextMenuBackdrop: document.querySelector("#context-menu-backdrop"),
   contextMenu: document.querySelector("#context-menu"),
+  downloadProgressStack: document.querySelector("#download-progress-stack"),
+  downloadProgressAnnouncer: document.querySelector("#download-progress-announcer"),
 };
 
 const SHORTCUT_ACTION_MAP = new Map(SHORTCUT_ACTIONS.map((action) => [action.id, action]));
+const downloadProgressRemovalTimers = new Map();
 
 function createId(prefix) {
   return `${prefix}-${crypto.randomUUID()}`;
@@ -198,6 +205,103 @@ function escapeHtml(value) {
     .replaceAll(">", "&gt;")
     .replaceAll('"', "&quot;")
     .replaceAll("'", "&#39;");
+}
+
+function getDownloadStatusLabel(download) {
+  if (download.paused) {
+    return "一時停止";
+  }
+  if (download.status === "interrupted") {
+    return "接続待ち";
+  }
+  if (download.type === "completed") {
+    return "完了";
+  }
+  if (download.type === "cancelled") {
+    return "キャンセル";
+  }
+  if (download.type === "interrupted") {
+    return "失敗";
+  }
+  if (download.percent !== null) {
+    return `${Math.round(download.percent)}%`;
+  }
+  return download.purpose === "preview" ? "プレビュー準備中" : "ダウンロード中";
+}
+
+function renderDownloadProgress() {
+  if (!elements.downloadProgressStack) {
+    return;
+  }
+  elements.downloadProgressStack.innerHTML = "";
+  const { visible, hiddenCount } = window.FuzitterDownloadProgress.selectVisibleDownloads(state.activeDownloads, 5);
+  for (const download of visible) {
+    const terminal = window.FuzitterDownloadProgress.isTerminalDownloadState(download.type);
+    const percent = download.type === "completed" ? 100 : download.percent;
+    const item = document.createElement("article");
+    item.className = `download-progress-item download-progress-${download.type}`;
+    item.dataset.downloadId = download.downloadId;
+    item.setAttribute("aria-busy", String(!terminal));
+
+    const byteSummary = download.totalBytes > 0
+      ? `${window.FuzitterDownloadProgress.formatBytes(download.receivedBytes)} / ${window.FuzitterDownloadProgress.formatBytes(download.totalBytes)}`
+      : window.FuzitterDownloadProgress.formatBytes(download.receivedBytes);
+    const progressAttributes = percent === null
+      ? ""
+      : ` aria-valuenow="${Math.round(percent)}" aria-valuemin="0" aria-valuemax="100"`;
+
+    item.innerHTML = `
+      <div class="download-progress-header">
+        <strong class="download-progress-title" title="${escapeHtml(download.fileName)}">${escapeHtml(download.fileName)}</strong>
+        <span class="download-progress-status">${escapeHtml(getDownloadStatusLabel(download))}</span>
+      </div>
+      <div class="download-progress-track ${download.indeterminate ? "indeterminate" : ""}" role="progressbar" aria-label="${escapeHtml(download.fileName)} の進捗"${progressAttributes}>
+        <span class="download-progress-fill" style="${percent === null ? "" : `width: ${percent}%`}"></span>
+      </div>
+      <div class="download-progress-meta">${escapeHtml(byteSummary)}</div>
+    `;
+    elements.downloadProgressStack.appendChild(item);
+  }
+  if (hiddenCount > 0) {
+    const summary = document.createElement("div");
+    summary.className = "download-progress-summary";
+    summary.textContent = `ほか ${hiddenCount} 件をダウンロード中`;
+    elements.downloadProgressStack.appendChild(summary);
+  }
+}
+
+function updateDownloadProgress(payload) {
+  if (!payload?.downloadId) {
+    return false;
+  }
+
+  const existingTimer = downloadProgressRemovalTimers.get(payload.downloadId);
+  if (existingTimer) {
+    clearTimeout(existingTimer);
+    downloadProgressRemovalTimers.delete(payload.downloadId);
+  }
+
+  state.activeDownloads = window.FuzitterDownloadProgress.applyDownloadEvent(state.activeDownloads, payload);
+  renderDownloadProgress();
+
+  const download = state.activeDownloads.get(payload.downloadId);
+  if (elements.downloadProgressAnnouncer && download) {
+    if (payload.type === "started") {
+      elements.downloadProgressAnnouncer.textContent = `${download.fileName} のダウンロードを開始しました`;
+    } else if (window.FuzitterDownloadProgress.isTerminalDownloadState(payload.type)) {
+      elements.downloadProgressAnnouncer.textContent = `${download.fileName}: ${getDownloadStatusLabel(download)}`;
+    }
+  }
+
+  if (window.FuzitterDownloadProgress.isTerminalDownloadState(payload.type)) {
+    const timer = setTimeout(() => {
+      state.activeDownloads.delete(payload.downloadId);
+      downloadProgressRemovalTimers.delete(payload.downloadId);
+      renderDownloadProgress();
+    }, 2800);
+    downloadProgressRemovalTimers.set(payload.downloadId, timer);
+  }
+  return true;
 }
 
 function normalizeKeyBindingMap(rawBindings = {}) {
@@ -745,6 +849,9 @@ function classifyMoodlePage(context) {
     if (pathname.endsWith("/course/view.php") && parsed.searchParams.get("id")) {
       return "course";
     }
+    if (window.FuzitterTimelineMatching.isCourseSectionPageUrl(parsed.toString())) {
+      return "section";
+    }
     return "other";
   } catch (_error) {
     return "outside";
@@ -780,6 +887,9 @@ function classifyMoodlePage(context) {
     if (pathname.endsWith("/course/view.php") && parsed.searchParams.get("id")) {
       return "course";
     }
+    if (window.FuzitterTimelineMatching.isCourseSectionPageUrl(parsed.toString())) {
+      return "section";
+    }
     return "other";
   } catch (_error) {
     return "outside";
@@ -802,6 +912,18 @@ function isSubmissionPageContext(context = {}) {
     const parsed = new URL(context?.url || "");
     return /moodle(?:\d{4})?\.wakayama-u\.ac\.jp$/i.test(parsed.hostname)
       && window.FuzitterTimelineMatching.isSubmissionPageUrl(parsed.toString());
+  } catch (_error) {
+    return false;
+  }
+}
+
+function isCourseSectionPageContext(context = {}) {
+  if (context?.pageKind === "section") {
+    return true;
+  }
+
+  try {
+    return window.FuzitterTimelineMatching.isCourseSectionPageUrl(context?.url || "");
   } catch (_error) {
     return false;
   }
@@ -1522,9 +1644,11 @@ function applyTabSlideDragStyles() {
 
   const draggedButton = tabButtons[sourceIndex];
   const draggedRect = draggedButton.getBoundingClientRect();
-  const gap = Number.parseFloat(getComputedStyle(elements.browserTabStrip).gap || "0") || 0;
+  const tabStripStyle = getComputedStyle(elements.browserTabStrip);
+  const gap = Number.parseFloat(tabStripStyle.gap || "0") || 0;
+  const overlap = Number.parseFloat(tabStripStyle.getPropertyValue("--browser-tab-overlap") || "0") || 0;
   const dragDistance = drag.currentX - drag.startX;
-  const shiftDistance = draggedRect.width + gap;
+  const shiftDistance = Math.max(draggedRect.width + gap - overlap, 0);
 
   draggedButton.classList.add("dragging");
   draggedButton.style.transform = `translateX(${dragDistance}px)`;
@@ -1930,7 +2054,10 @@ function renderSidePanelVisibility() {
   elements.sidePanel.classList.toggle("hidden", !state.panelVisible);
   elements.workspaceMain.classList.toggle("panel-hidden", !state.panelVisible);
   elements.dockToggleButton.classList.toggle("panel-open", state.panelVisible);
-  elements.dockToggleButton.textContent = state.panelVisible ? "<" : ">";
+  const toggleLabel = state.panelVisible ? "右パネルを閉じる" : "右パネルを開く";
+  elements.dockToggleButton.setAttribute("aria-expanded", String(state.panelVisible));
+  elements.dockToggleButton.setAttribute("aria-label", toggleLabel);
+  elements.dockToggleButton.title = toggleLabel;
   elements.sidePanelTabActions?.classList.toggle("is-hidden", !state.panelVisible);
   renderBrowserLayout();
 }
@@ -1978,8 +2105,11 @@ function refreshOnboardingState() {
   if (elements.onboardingRootDirLabel) {
     elements.onboardingRootDirLabel.textContent = getOnboardingRootDirText();
   }
-  if (elements.onboardingCompleteButton) {
-    elements.onboardingCompleteButton.disabled = !canCompleteOnboarding();
+  const disabled = !canCompleteOnboarding();
+  for (const button of [elements.onboardingCompleteButton, elements.onboardingTutorialButton]) {
+    if (button) {
+      button.disabled = disabled;
+    }
   }
 }
 
@@ -2011,8 +2141,8 @@ async function openRenameSelectionAction() {
   if (selectedEntries.length !== 1) {
     toast(
       selectedEntries.length > 1
-        ? "Rename は 1 件だけ選択して実行してください"
-        : "Rename する項目を 1 件選択してください",
+        ? "名前の変更は 1 件だけ選択して実行してください"
+        : "名前を変更する項目を 1 件選択してください",
       "warn"
     );
     return false;
@@ -2173,9 +2303,11 @@ function createBrowserTab(url, title = UI_TEXT.defaultBrowserTitle, options = {}
     courseId: "",
     courseUrl: "",
     pageKind: "",
+    isLoading: true,
     contentEl: null,
     webviewEl: null,
     webContentsId: null,
+    loadingBarEl: null,
   };
   state.tabs.push(tab);
   mountTab(tab);
@@ -2220,9 +2352,11 @@ function createRemotePdfTab(pdfUrl, title, sourceTab) {
     courseName: sourceTab?.courseName || "",
     courseId: sourceTab?.courseId || "",
     courseUrl: sourceTab?.courseUrl || sourceTab?.url || "",
+    isLoading: true,
     contentEl: null,
     webviewEl: null,
     webContentsId: null,
+    loadingBarEl: null,
   };
   state.tabs.push(tab);
   mountTab(tab);
@@ -2283,6 +2417,7 @@ function closeTab(tabId) {
 
   tab.webviewEl?.remove();
   tab.webviewEl = null;
+  tab.loadingBarEl = null;
   tab.contentEl?.remove();
   tab.contentEl = null;
   state.tabs = state.tabs.filter((entry) => entry.id !== tabId);
@@ -3061,10 +3196,37 @@ async function ensureCourseMapping(tab) {
   return { needsPrompt: true };
 }
 
+function syncTabLoadingPresentation(tab) {
+  if (!tab) {
+    return;
+  }
+
+  const isLoading = Boolean(tab.isLoading);
+  const tabButton = elements.browserTabStrip.querySelector(`.browser-tab[data-tab-id="${tab.id}"]`);
+  tabButton?.classList.toggle("is-loading", isLoading);
+  tabButton?.setAttribute("aria-busy", String(isLoading));
+  tab.contentEl?.classList.toggle("is-loading", isLoading);
+  tab.contentEl?.setAttribute("aria-busy", String(isLoading));
+  tab.loadingBarEl?.setAttribute("aria-hidden", String(!isLoading));
+}
+
+function setTabLoading(tab, isLoading) {
+  if (!tab) {
+    return;
+  }
+  tab.isLoading = Boolean(isLoading);
+  syncTabLoadingPresentation(tab);
+}
+
 function mountBrowserLikeTab(tab, usePreload = true) {
   const contentEl = document.createElement("div");
   contentEl.className = "browser-surface";
   contentEl.dataset.tabId = tab.id;
+
+  const loadingBar = document.createElement("div");
+  loadingBar.className = "page-loading-bar";
+  loadingBar.setAttribute("role", "progressbar");
+  loadingBar.setAttribute("aria-label", "ページを読み込んでいます");
 
   const uploadSupport = getUploadSupportForTab(tab);
   const uploadOverlay = document.createElement("div");
@@ -3087,6 +3249,20 @@ function mountBrowserLikeTab(tab, usePreload = true) {
   });
   webview.addEventListener("click", () => {
     focusBrowserSurface(tab);
+  });
+
+  webview.addEventListener("did-start-loading", () => {
+    setTabLoading(tab, true);
+  });
+
+  webview.addEventListener("did-stop-loading", () => {
+    setTabLoading(tab, false);
+  });
+
+  webview.addEventListener("did-fail-load", (event) => {
+    if (event.isMainFrame && event.errorCode !== -3) {
+      setTabLoading(tab, false);
+    }
   });
 
   webview.addEventListener("did-finish-load", () => {
@@ -3216,12 +3392,15 @@ function mountBrowserLikeTab(tab, usePreload = true) {
   tab.webviewEl = webview;
   tab.contentEl = contentEl;
   tab.uploadOverlayEl = uploadOverlay;
+  tab.loadingBarEl = loadingBar;
   bindBrowserUploadDropTarget(uploadOverlay, tab);
   bindBrowserUploadDropTarget(contentEl, tab);
   contentEl.appendChild(webview);
   contentEl.appendChild(uploadOverlay);
+  contentEl.appendChild(loadingBar);
   elements.browserContent.appendChild(contentEl);
 
+  syncTabLoadingPresentation(tab);
   renderBrowserLayout();
 }
 
@@ -3238,7 +3417,7 @@ function syncTabFromWebview(tab) {
   const pageType = classifyMoodlePage({ url: tab.url, title: htmlTitle });
   const nextPageKind = isSubmissionPageContext({ url: tab.url })
     ? "submission"
-    : (pageType === "course" ? "course" : "");
+    : (pageType === "section" ? "section" : (pageType === "course" ? "course" : ""));
   if (isExplorerLinkedTab(tab)) {
     const courseContext = window.FuzitterTimelineMatching.mergeCourseContext(tab, {
       url: tab.url,
@@ -3376,12 +3555,12 @@ async function openExplorerEntryWith(entry, program) {
     targetPath: entry.path,
     program,
   });
-  toast(`${entry.name} opened in ${program}`, "success");
+  toast(`${entry.name} を ${program} で開きました`, "success");
 }
 
 async function openExplorerExecutable(entry) {
   await window.fuzzyApi.openExplorerExecutable(entry.path);
-  toast(`${entry.name} opened`, "success");
+  toast(`${entry.name} を開きました`, "success");
 }
 
 async function openExplorerEntrySmart(entry) {
@@ -3409,27 +3588,27 @@ async function openExplorerEntrySmart(entry) {
 
 function buildExplorerCreateMenu(parentPath) {
   return {
-    label: "New",
+    label: "新規作成",
     expanded: false,
     children: [
       {
-        label: "Word document",
+        label: "Word 文書",
         action: async () => createExplorerEntry(parentPath, "word"),
       },
       {
-        label: "Excel workbook",
+        label: "Excel ブック",
         action: async () => createExplorerEntry(parentPath, "excel"),
       },
       {
-        label: "PowerPoint presentation",
+        label: "PowerPoint プレゼンテーション",
         action: async () => createExplorerEntry(parentPath, "powerpoint"),
       },
       {
-        label: "Text document",
+        label: "テキスト ドキュメント",
         action: async () => createExplorerEntry(parentPath, "text"),
       },
       {
-        label: "Folder",
+        label: "フォルダー",
         action: async () => createExplorerEntry(parentPath, "folder"),
       },
     ],
@@ -3439,7 +3618,7 @@ function buildExplorerCreateMenu(parentPath) {
 
 function buildExplorerOpenWithMenu(entry) {
   return {
-    label: "別タブで開く",
+    label: "プログラムから開く",
     expanded: false,
     children: [
       {
@@ -3563,8 +3742,10 @@ async function duplicateExplorerEntry(entry) {
 function showRenameDialog(entry, options = {}) {
   const openRenameDialog = async () => {
     await window.fuzzyApi.focusWindow?.();
+    const mode = options.mode === "create" ? "create" : "rename";
     state.renameDraft = {
       ...entry,
+      mode,
       openPathAfterSave: options.openPathAfterSave || "",
       pendingAutoSelect: true,
       openedAt: Date.now(),
@@ -3574,7 +3755,13 @@ function showRenameDialog(entry, options = {}) {
       document.activeElement.blur();
     }
     elements.renameFileNameInput.value = entry.name;
-    elements.renameCurrentName.textContent = `現在の名前: ${entry.name}`;
+    elements.renameDialogTitle.textContent = mode === "create"
+      ? options.dialogTitle || "新規作成"
+      : "名前の変更";
+    elements.renameCurrentName.textContent = mode === "create"
+      ? "作成する名前を入力してください"
+      : `現在の名前: ${entry.name}`;
+    elements.renameSaveButton.textContent = mode === "create" ? "新規作成する" : "変更する";
     elements.renameDialog.showModal();
     void window.fuzzyApi.focusWindow?.().finally(() => {
       focusDialogInput(elements.renameFileNameInput, { select: true, selectFileStem: true });
@@ -3633,22 +3820,29 @@ function openExplorerBackgroundMenu(x, y) {
   if (!targetDir) {
     return;
   }
-  const items = [buildExplorerCreateMenu(targetDir)];
+  const items = [];
+  if (isWithinPath(targetDir, state.rootDir)) {
+    items.push(buildExplorerCreateMenu(targetDir));
+  }
   if (state.cutExplorerPaths.length || state.copiedExplorerPaths.length) {
     items.push({
-      label: "Paste",
+      label: "貼り付け",
       action: async () => pasteCutExplorerEntries(),
     });
   }
-  showContextMenu(items, x, y);
+  if (items.length) {
+    showContextMenu(items, x, y);
+  } else {
+    hideContextMenu();
+  }
 }
 
 function openExplorerEntryMenu(entry, x, y) {
   if (state.selectedExplorerPaths.size > 1 && state.selectedExplorerPaths.has(entry.path)) {
     showContextMenu([
-      { label: "Copy", action: async () => copySelectedExplorerEntries() },
-      { label: "Cut", action: async () => cutSelectedExplorerEntries() },
-      { label: "Delete", tone: "danger", action: async () => deleteExplorerEntries(getSelectedExplorerEntries()) },
+      { label: "コピー", action: async () => copySelectedExplorerEntries() },
+      { label: "切り取り", action: async () => cutSelectedExplorerEntries() },
+      { label: "削除", tone: "danger", action: async () => deleteExplorerEntries(getSelectedExplorerEntries()) },
     ], x, y);
     return;
   }
@@ -3657,24 +3851,24 @@ function openExplorerEntryMenu(entry, x, y) {
     const modernItems = [];
     if (entry.isDirectory) {
       modernItems.push({
-        label: "Open",
+        label: "開く",
         action: () => loadDirectory(entry.path, { syncBrowserFromDirectory: true }),
       });
     } else {
       modernItems.push({
-        label: "Open",
+        label: "開く",
         action: async () => openExplorerEntrySmart(entry),
       });
       modernItems.push({
-        label: "Open in New Tab",
+        label: "新しいタブで開く",
         action: async () => openLocalFileInTab(entry.path, entry.name),
       });
     }
     if (entry.withinRoot !== false) {
-      modernItems.push({ label: "Copy", action: async () => copySelectedExplorerEntries() });
-      modernItems.push({ label: "Cut", action: async () => cutSelectedExplorerEntries() });
-      modernItems.push({ label: "Rename", action: async () => showRenameDialog(entry) });
-      modernItems.push({ label: "Delete", tone: "danger", action: async () => deleteExplorerEntry(entry) });
+      modernItems.push({ label: "コピー", action: async () => copySelectedExplorerEntries() });
+      modernItems.push({ label: "切り取り", action: async () => cutSelectedExplorerEntries() });
+      modernItems.push({ label: "名前の変更", action: async () => showRenameDialog(entry) });
+      modernItems.push({ label: "削除", tone: "danger", action: async () => deleteExplorerEntry(entry) });
       if (!entry.isDirectory) {
         modernItems.push(buildExplorerOpenWithMenu(entry));
       }
@@ -3703,11 +3897,11 @@ function openExplorerEntryMenu(entry, x, y) {
   }
   if (entry.withinRoot !== false) {
     items.push({
-      label: "Copy",
+      label: "コピー",
       action: async () => duplicateExplorerEntry(entry),
     });
     items.push({
-      label: "Rename",
+      label: "名前の変更",
       action: async () => showRenameDialog(entry),
     });
     items.push({
@@ -3826,25 +4020,35 @@ function mountTab(tab) {
 
 function renderBrowserTabs() {
   elements.browserTabStrip.innerHTML = "";
+  let activeTabItem = null;
   for (const tab of state.tabs) {
-    const button = document.createElement("button");
-    button.type = "button";
-    button.className = `browser-tab ${tab.id === state.activeTabId ? "active" : ""}`;
-    button.dataset.tabId = tab.id;
-    button.innerHTML = `
-      <span class="tab-dot ${getTabColor(tab.kind)}"></span>
-      <span class="tab-title">${escapeHtml(tab.title || UI_TEXT.defaultBrowserTitle)}</span>
-      <span class="tab-close" data-close-tab="${tab.id}">×</span>
+    const tabTitle = tab.title || UI_TEXT.defaultBrowserTitle;
+    const tabItem = document.createElement("div");
+    tabItem.className = `browser-tab ${tab.id === state.activeTabId ? "active" : ""} ${tab.isLoading ? "is-loading" : ""}`;
+    tabItem.dataset.tabId = tab.id;
+    tabItem.setAttribute("role", "group");
+    tabItem.setAttribute("aria-busy", String(Boolean(tab.isLoading)));
+    tabItem.setAttribute("aria-label", `${tabTitle} タブ`);
+    tabItem.title = tabTitle;
+    tabItem.innerHTML = `
+      <button type="button" class="tab-activate" aria-label="${escapeHtml(tabTitle)} を表示" ${tab.id === state.activeTabId ? 'aria-current="page"' : ""}>
+        <span class="tab-dot ${getTabColor(tab.kind)}" aria-hidden="true"></span>
+        <span class="tab-title">${escapeHtml(tabTitle)}</span>
+      </button>
+      <button type="button" class="tab-close" data-close-tab="${tab.id}" aria-label="${escapeHtml(tabTitle)} を閉じる"><span aria-hidden="true">×</span></button>
     `;
-    button.addEventListener("pointerdown", (event) => {
+    if (tab.id === state.activeTabId) {
+      activeTabItem = tabItem;
+    }
+    tabItem.addEventListener("pointerdown", (event) => {
       const closeTarget = closestFromEventTarget(event.target, "[data-close-tab]");
       if (event.button !== 0 || closeTarget) {
         return;
       }
-      button.setPointerCapture(event.pointerId);
+      tabItem.setPointerCapture(event.pointerId);
       beginTabSlideDrag(tab.id, event.pointerId, event.clientX);
     });
-    button.addEventListener("auxclick", (event) => {
+    tabItem.addEventListener("auxclick", (event) => {
       if (event.button !== 1) {
         return;
       }
@@ -3852,7 +4056,7 @@ function renderBrowserTabs() {
       event.stopPropagation();
       toggleSplitEditMode();
     });
-    button.addEventListener("contextmenu", (event) => {
+    tabItem.addEventListener("contextmenu", (event) => {
       event.preventDefault();
       event.stopPropagation();
       const items = [
@@ -3874,16 +4078,23 @@ function renderBrowserTabs() {
       }
       showContextMenu(items, event.clientX, event.clientY);
     });
-    elements.browserTabStrip.appendChild(button);
+    elements.browserTabStrip.appendChild(tabItem);
   }
 
   const addButton = document.createElement("button");
   addButton.type = "button";
-  addButton.className = "browser-tab";
+  addButton.className = "browser-tab browser-tab-add";
   addButton.dataset.addTab = "true";
+  addButton.title = "新しいタブ";
+  addButton.setAttribute("aria-label", "新しいタブを開く");
   addButton.innerHTML = `<span class="tab-title">＋</span>`;
   elements.browserTabStrip.appendChild(addButton);
   applyTabSlideDragStyles();
+  if (activeTabItem && !state.tabSlideDrag?.started) {
+    requestAnimationFrame(() => {
+      activeTabItem.scrollIntoView({ block: "nearest", inline: "nearest" });
+    });
+  }
 }
 
 function activateTab(tabId, options = {}) {
@@ -3920,7 +4131,9 @@ function openWebLinkMenu(payload) {
 
 async function updateCurrentCourse(tab) {
   const shouldSyncCourse = isExplorerLinkedTab(tab) && (
-    shouldPromptForCourseMapping(tab) || isSubmissionPageContext(tab)
+    shouldPromptForCourseMapping(tab) ||
+    isCourseSectionPageContext(tab) ||
+    isSubmissionPageContext(tab)
   );
   let mapping = shouldSyncCourse
     ? (findMappingForTab(tab) || findMappingForCourse(tab?.courseName))
@@ -4195,6 +4408,33 @@ async function loadDirectory(targetPath, options = {}) {
   }
 
   renderSubmissionFolderButton();
+}
+
+function applyAppSettingsSnapshot(payload = {}) {
+  const defaults = payload.defaults || {};
+  const initial = payload.state || {};
+  const directory = initial.directory || { currentDir: initial.rootDir || "", entries: [] };
+
+  setMoodleHome(defaults.moodleHome || "");
+  state.dashboardAutoload = Boolean(defaults.dashboardAutoload);
+  state.onboardingCompleted = Boolean(defaults.onboardingCompleted);
+  state.keyBindings = normalizeKeyBindingMap(defaults.keyBindings);
+  state.rootDir = initial.rootDir || "";
+  state.currentDir = directory.currentDir || state.rootDir;
+  state.mappings = Array.isArray(initial.mappings) ? initial.mappings : [];
+  state.pendingMappingCourse = null;
+  state.mappingPromptedCourses.clear();
+
+  elements.rootDirLabel.textContent = state.rootDir || UI_TEXT.rootUnset;
+  elements.onboardingRootDirLabel.textContent = state.rootDir || UI_TEXT.rootUnset;
+  elements.onboardingMoodleHomeInput.value = defaults.moodleHome || "";
+  elements.moodleHomeInput.value = defaults.moodleHome || "";
+  renderCurrentPath(state.currentDir);
+  renderDirectory(directory.entries || []);
+  renderMappings();
+  renderShortcutSettings();
+  renderSubmissionFolderButton();
+  refreshOnboardingState();
 }
 
 async function saveMapping(courseName, folderPath, matchType, courseUrl) {
@@ -4479,22 +4719,8 @@ function wireEvents() {
     event.preventDefault();
     event.stopPropagation();
     if (state.selectedExplorerPaths.size > 0) {
-      showContextMenu([
-        { label: "Copy", action: async () => copySelectedExplorerEntries() },
-        { label: "Cut", action: async () => cutSelectedExplorerEntries() },
-        { label: "Delete", tone: "danger", action: async () => deleteExplorerEntries(getSelectedExplorerEntries()) },
-      ], event.clientX, event.clientY);
-      return;
-    }
-    if (state.selectedExplorerPaths.size > 0) {
-      showContextMenu([
-        {
-          label: "削除",
-          tone: "danger",
-          action: async () => deleteExplorerEntries(getSelectedExplorerEntries()),
-        },
-      ], event.clientX, event.clientY);
-      return;
+      setExplorerSelection([], "");
+      renderExplorerSelectionState();
     }
     openExplorerBackgroundMenu(event.clientX, event.clientY);
   });
@@ -4779,7 +5005,7 @@ function wireEvents() {
   elements.onboardingChooseRootButton?.addEventListener("click", async () => {
     await chooseRootDirectory();
   });
-  elements.onboardingCompleteButton?.addEventListener("click", async () => {
+  async function completeOnboarding({ openTutorial = false } = {}) {
     if (!canCompleteOnboarding()) {
       refreshOnboardingState();
       return;
@@ -4793,11 +5019,19 @@ function wireEvents() {
       state.onboardingCompleted = true;
       elements.moodleHomeInput.value = preferences.moodleHome;
       elements.onboardingDialog?.close();
-      openTutorialPdf();
+      if (openTutorial) {
+        openTutorialPdf();
+      }
       toast("初回設定を保存しました", "success");
     } catch (error) {
       toast(error.message, "error");
     }
+  }
+  elements.onboardingCompleteButton?.addEventListener("click", () => {
+    void completeOnboarding();
+  });
+  elements.onboardingTutorialButton?.addEventListener("click", () => {
+    void completeOnboarding({ openTutorial: true });
   });
 
   elements.resetSiteDataButton?.addEventListener("click", async () => {
@@ -4822,6 +5056,28 @@ function wireEvents() {
     } finally {
       elements.resetSiteDataButton.disabled = false;
       elements.siteDataResetSelect.disabled = false;
+    }
+  });
+
+  elements.resetAppSettingsButton?.addEventListener("click", async () => {
+    const confirmed = window.confirm(
+      "保存ルート、Moodle URL、コース対応、キー設定を初期状態に戻しますか？\n保存済みファイルとサイトデータは削除されません。"
+    );
+    if (!confirmed) {
+      return;
+    }
+
+    elements.resetAppSettingsButton.disabled = true;
+    try {
+      const snapshot = await window.fuzzyApi.resetAppSettings();
+      stopShortcutRecording();
+      applyAppSettingsSnapshot(snapshot);
+      toast("設定を初期化しました。アプリを再起動します", "success");
+      await window.fuzzyApi.restartApp();
+    } catch (error) {
+      toast(error.message, "error");
+    } finally {
+      elements.resetAppSettingsButton.disabled = false;
     }
   });
 
@@ -4866,13 +5122,14 @@ function wireEvents() {
     await loadDirectory(mapping.createdNewFolder ? state.rootDir : mapping.folderPath, { syncBrowserFromDirectory: false });
     elements.mappingDialog.close();
     if (mapping.createdNewFolder) {
-      const renamed = showRenameDialogForPath(mapping.folderPath);
-      if (renamed && state.renameDraft) {
-        state.renameDraft.openPathAfterSave = mapping.folderPath;
-      }
+      const renamed = showRenameDialogForPath(mapping.folderPath, {
+        mode: "create",
+        dialogTitle: "コースフォルダを新規作成",
+        openPathAfterSave: mapping.folderPath,
+      });
       toast(
         renamed
-          ? "コース用フォルダを作成しました。続けて名前を変更できます"
+          ? "コースフォルダ名を入力してください"
           : "コース用フォルダを作成しました",
         "success",
       );
@@ -5056,6 +5313,9 @@ function wireEvents() {
       return;
     }
     if (nextName === state.renameDraft.name) {
+      if (state.renameDraft.mode === "create") {
+        toast(`${nextName} を新規作成しました`, "success");
+      }
       elements.renameDialog.close();
       return;
     }
@@ -5082,7 +5342,12 @@ function wireEvents() {
       ? renameResult?.path || renameDraft.openPathAfterSave
       : state.currentDir || state.rootDir;
     await loadDirectory(nextDirectory, { syncBrowserFromDirectory: false });
-    toast(`${previousName} の名前を変更しました`, "success");
+    toast(
+      renameDraft.mode === "create"
+        ? `${nextName} を新規作成しました`
+        : `${previousName} の名前を変更しました`,
+      "success"
+    );
   });
   elements.renameForm.addEventListener("submit", (event) => {
     event.preventDefault();
@@ -5093,6 +5358,8 @@ function wireEvents() {
   elements.renameDialog.addEventListener("close", () => {
     setDialogFocusLock(false);
     state.renameDraft = null;
+    elements.renameDialogTitle.textContent = "名前の変更";
+    elements.renameSaveButton.textContent = "変更する";
     elements.renameCurrentName.textContent = "";
     elements.renameFileNameInput.value = "";
   });
@@ -5239,8 +5506,8 @@ window.fuzzyApi.onAppUpdateEvent((payload) => {
 });
 
 window.fuzzyApi.onDownloadEvent(async (payload) => {
+  const hasProgressDisplay = updateDownloadProgress(payload);
   if (payload.type === "started") {
-    toast(`${payload.fileName} を保存中です`, "info");
     if (payload.requiresReview && payload.courseName) {
       const activeTab = getActiveTab();
       if (activeTab?.courseName === payload.courseName) {
@@ -5249,17 +5516,30 @@ window.fuzzyApi.onDownloadEvent(async (payload) => {
     }
     return;
   }
+  if (payload.type === "progress") {
+    return;
+  }
   if (payload.type === "completed") {
-    toast(`${payload.fileName} を保存しました`, "success");
-    await loadDirectory(state.currentDir || state.rootDir, { syncBrowserFromDirectory: false });
+    if (payload.purpose === "save") {
+      toast(`${payload.fileName} を保存しました`, "success");
+      await loadDirectory(state.currentDir || state.rootDir, { syncBrowserFromDirectory: false });
+    }
     return;
   }
   if (payload.type === "blocked") {
     toast(payload.message, "warn");
     return;
   }
+  if (payload.type === "cancelled") {
+    toast(`${payload.fileName || "ファイル"} のダウンロードをキャンセルしました`, "warn");
+    return;
+  }
   if (payload.type === "interrupted") {
-    toast(`${payload.fileName} の保存に失敗しました`, "error");
+    toast(payload.message || `${payload.fileName || "ファイル"} のダウンロードに失敗しました`, "error");
+    return;
+  }
+  if (!hasProgressDisplay && payload.message) {
+    toast(payload.message, "warn");
   }
 });
 
