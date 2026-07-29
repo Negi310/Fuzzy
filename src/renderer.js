@@ -150,6 +150,7 @@ const elements = {
   onboardingRootDirLabel: document.querySelector("#onboarding-root-dir-label"),
   onboardingChooseRootButton: document.querySelector("#onboarding-choose-root-button"),
   onboardingCompleteButton: document.querySelector("#onboarding-complete-button"),
+  onboardingTutorialButton: document.querySelector("#onboarding-tutorial-button"),
   mappingCourseLabel: document.querySelector("#mapping-course-label"),
   mappingSuggestions: document.querySelector("#mapping-suggestions"),
   dashboardWebview: document.querySelector("#dashboard-webview"),
@@ -848,6 +849,9 @@ function classifyMoodlePage(context) {
     if (pathname.endsWith("/course/view.php") && parsed.searchParams.get("id")) {
       return "course";
     }
+    if (window.FuzitterTimelineMatching.isCourseSectionPageUrl(parsed.toString())) {
+      return "section";
+    }
     return "other";
   } catch (_error) {
     return "outside";
@@ -883,6 +887,9 @@ function classifyMoodlePage(context) {
     if (pathname.endsWith("/course/view.php") && parsed.searchParams.get("id")) {
       return "course";
     }
+    if (window.FuzitterTimelineMatching.isCourseSectionPageUrl(parsed.toString())) {
+      return "section";
+    }
     return "other";
   } catch (_error) {
     return "outside";
@@ -905,6 +912,18 @@ function isSubmissionPageContext(context = {}) {
     const parsed = new URL(context?.url || "");
     return /moodle(?:\d{4})?\.wakayama-u\.ac\.jp$/i.test(parsed.hostname)
       && window.FuzitterTimelineMatching.isSubmissionPageUrl(parsed.toString());
+  } catch (_error) {
+    return false;
+  }
+}
+
+function isCourseSectionPageContext(context = {}) {
+  if (context?.pageKind === "section") {
+    return true;
+  }
+
+  try {
+    return window.FuzitterTimelineMatching.isCourseSectionPageUrl(context?.url || "");
   } catch (_error) {
     return false;
   }
@@ -2086,8 +2105,11 @@ function refreshOnboardingState() {
   if (elements.onboardingRootDirLabel) {
     elements.onboardingRootDirLabel.textContent = getOnboardingRootDirText();
   }
-  if (elements.onboardingCompleteButton) {
-    elements.onboardingCompleteButton.disabled = !canCompleteOnboarding();
+  const disabled = !canCompleteOnboarding();
+  for (const button of [elements.onboardingCompleteButton, elements.onboardingTutorialButton]) {
+    if (button) {
+      button.disabled = disabled;
+    }
   }
 }
 
@@ -3395,7 +3417,7 @@ function syncTabFromWebview(tab) {
   const pageType = classifyMoodlePage({ url: tab.url, title: htmlTitle });
   const nextPageKind = isSubmissionPageContext({ url: tab.url })
     ? "submission"
-    : (pageType === "course" ? "course" : "");
+    : (pageType === "section" ? "section" : (pageType === "course" ? "course" : ""));
   if (isExplorerLinkedTab(tab)) {
     const courseContext = window.FuzitterTimelineMatching.mergeCourseContext(tab, {
       url: tab.url,
@@ -4109,7 +4131,9 @@ function openWebLinkMenu(payload) {
 
 async function updateCurrentCourse(tab) {
   const shouldSyncCourse = isExplorerLinkedTab(tab) && (
-    shouldPromptForCourseMapping(tab) || isSubmissionPageContext(tab)
+    shouldPromptForCourseMapping(tab) ||
+    isCourseSectionPageContext(tab) ||
+    isSubmissionPageContext(tab)
   );
   let mapping = shouldSyncCourse
     ? (findMappingForTab(tab) || findMappingForCourse(tab?.courseName))
@@ -4981,7 +5005,7 @@ function wireEvents() {
   elements.onboardingChooseRootButton?.addEventListener("click", async () => {
     await chooseRootDirectory();
   });
-  elements.onboardingCompleteButton?.addEventListener("click", async () => {
+  async function completeOnboarding({ openTutorial = false } = {}) {
     if (!canCompleteOnboarding()) {
       refreshOnboardingState();
       return;
@@ -4995,10 +5019,19 @@ function wireEvents() {
       state.onboardingCompleted = true;
       elements.moodleHomeInput.value = preferences.moodleHome;
       elements.onboardingDialog?.close();
+      if (openTutorial) {
+        openTutorialPdf();
+      }
       toast("初回設定を保存しました", "success");
     } catch (error) {
       toast(error.message, "error");
     }
+  }
+  elements.onboardingCompleteButton?.addEventListener("click", () => {
+    void completeOnboarding();
+  });
+  elements.onboardingTutorialButton?.addEventListener("click", () => {
+    void completeOnboarding({ openTutorial: true });
   });
 
   elements.resetSiteDataButton?.addEventListener("click", async () => {
