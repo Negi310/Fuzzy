@@ -9,6 +9,11 @@ const stylesSource = fs.readFileSync(path.join(srcDir, "styles.css"), "utf8");
 const preloadSource = fs.readFileSync(path.join(srcDir, "preload.js"), "utf8");
 const mainSource = fs.readFileSync(path.join(srcDir, "main.js"), "utf8");
 
+test("tutorial opens the submitted PDF from docs", () => {
+  assert.ok(rendererSource.includes("\\\\docs\\\\Fuzitter_Tutorial.pdf"));
+  assert.ok(fs.existsSync(path.join(srcDir, "..", "docs", "Fuzitter_Tutorial.pdf")));
+});
+
 test("browser tabs keep their maximum width and expose full titles", () => {
   assert.match(rendererSource, /tabItem\.title = tabTitle/);
   assert.match(rendererSource, /className = "browser-tab browser-tab-add"/);

@@ -8,7 +8,7 @@ const PRELOAD_PATH = (() => {
 })();
 
 const TUTORIAL_PDF_PATH = PRELOAD_PATH
-  .replace(/[\\\/]src[\\\/]browser-preload\.js$/i, "\\assets\\tutorial\\fuzitter-tutorial.pdf");
+  .replace(/[\\\/]src[\\\/]browser-preload\.js$/i, "\\docs\\Fuzitter_Tutorial.pdf");
 
 const WEBVIEW_PARTITION = "persist:fuzitter";
 

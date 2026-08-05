@@ -9,7 +9,7 @@ from reportlab.pdfgen import canvas
 ROOT = Path(__file__).resolve().parents[1]
 OUTPUT_DIR = ROOT / "output" / "pdf"
 MAIN_SCREENSHOT_PATH = ROOT / "assets" / "tutorial" / "main-window.png"
-OUTPUT_PATH = ROOT / "assets" / "tutorial" / "fuzitter-tutorial.pdf"
+OUTPUT_PATH = ROOT / "docs" / "Fuzitter_Tutorial.pdf"
 PAGE1_PNG = OUTPUT_DIR / "fuzitter-tutorial-page-1.png"
 PAGE2_PNG = OUTPUT_DIR / "fuzitter-tutorial-page-2.png"
 
