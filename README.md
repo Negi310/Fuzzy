@@ -47,6 +47,20 @@
 
 再頒布が禁止されている素材、および映っている人物から肖像利用の確認が取れていない動作デモ録画は、提出物に同梱していません。
 
+### 2.4 FuzitterSite
+
+`FuzitterSite/FuzitterSite/`には、Fuzitterの紹介・配布用Webサイトを収録しています。公開先は [Fuzitter公式サイト](https://negi310.github.io/Fuzzy/) です。
+
+| 内容 | 保存場所 | 説明 |
+| --- | --- | --- |
+| ページ本体 | `FuzitterSite/FuzitterSite/index.html` | Fuzitterの概要、主な機能、スクリーンショット、FAQ、ダウンロード導線を構成します。 |
+| デザイン | `FuzitterSite/FuzitterSite/style.css` | レスポンシブレイアウト、配色、カード、アニメーションなどの表示スタイルです。 |
+| 画面動作 | `FuzitterSite/FuzitterSite/script.js` | スクロール演出、スクリーンショット表示、GitHub Releasesから最新版Setupを取得するダウンロード処理です。 |
+| サイト素材 | `FuzitterSite/FuzitterSite/assets/` | ロゴ、画面画像、機能アイコン、開発者画像などです。 |
+| 公開処理 | `.github/workflows/github-pages.yml` | mainブランチのサイト内容をGitHub Pagesへ公開するワークフローです。 |
+
+サイト上のDownloadボタンは、GitHub Releasesの最新版から`Fuzitter-Setup-*.exe`を検索し、Windows用インストーラーを直接ダウンロードします。取得できない場合はGitHubの最新リリース画面へ移動します。
+
 ## 3. フォルダ構成
 
 ```text
@@ -66,7 +80,12 @@ Fuzzy/
 │  └─ Fuzitter-win32-x64/            直接起動版と実行に必要なファイル
 ├─ scripts/                          ビルド・生成用スクリプト
 ├─ tests/                            自動テスト
-└─ FuzitterSite/                     紹介・配布サイトのソース
+└─ FuzitterSite/
+   └─ FuzitterSite/
+      ├─ index.html                  紹介・配布サイトのページ本体
+      ├─ style.css                   サイトのデザイン
+      ├─ script.js                   表示演出・最新版ダウンロード処理
+      └─ assets/                     ロゴ・画面画像・機能アイコン
 ```
 
 ## 4. 提出時の注意
