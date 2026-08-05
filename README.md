@@ -12,7 +12,7 @@
 
 | 内容 | 保存場所 | 説明 |
 | --- | --- | --- |
-| Windows用インストーラー | `dist/Fuzitter-Setup-0.1.29.exe` | Windows 11以降でFuzitterをインストールするための実行ファイルです。 |
+| Windows用インストーラー | `dist/Fuzitter-Setup-0.2.0.exe` | Windows 11以降でFuzitterをインストールするための実行ファイルです。 |
 | 直接起動版 | `dist/Fuzitter-win32-x64/Fuzitter.exe` | インストールせず、展開済みフォルダから直接起動する実行ファイルです。同じフォルダ内のDLLや`resources`も実行に必要です。 |
 | アプリ本体のソース | `src/` | Electronのメイン処理、画面、Moodle連携、ファイル管理、タイムライン、設定保存などの実装です。 |
 | 画像・アイコン | `assets/` | アプリのアイコンやチュートリアル作成用画像です。 |
@@ -21,7 +21,7 @@
 | Webサイト | `FuzitterSite/` | Fuzitter紹介・配布サイトのソースです。 |
 | 依存関係・実行設定 | `package.json`、`package-lock.json` | 使用ライブラリ、実行、テスト、ビルドの設定です。 |
 
-インストーラーを使用する場合は、`dist/Fuzitter-Setup-0.1.29.exe`を実行し、画面の案内に従ってインストールしてください。ソースから確認する場合は、Node.js環境で`npm install`後に`npm start`を実行します。
+インストーラーを使用する場合は、`dist/Fuzitter-Setup-0.2.0.exe`を実行し、画面の案内に従ってインストールしてください。ソースから確認する場合は、Node.js環境で`npm install`後に`npm start`を実行します。
 
 ### 2.2 チュートリアル画面（PDF）
 
@@ -76,7 +76,7 @@ Fuzzy/
 │  ├─ Fuzitter_out.mp4               発表会用完成動画
 │  └─ あプでザ_1.mp4 ～ _6.mp4       動画素材・動作デモ録画
 ├─ dist/
-│  ├─ Fuzitter-Setup-0.1.29.exe      Windows用インストーラー
+│  ├─ Fuzitter-Setup-0.2.0.exe       Windows用インストーラー
 │  └─ Fuzitter-win32-x64/            直接起動版と実行に必要なファイル
 ├─ scripts/                          ビルド・生成用スクリプト
 ├─ tests/                            自動テスト
@@ -92,5 +92,5 @@ Fuzzy/
 
 - `dist/Fuzitter-win32-x64/`は、`Fuzitter.exe`だけを取り出さず、フォルダ一式で扱ってください。
 - `Presentation/`には、提出・再生・再頒布が可能な素材だけを収録してください。
-- `Presentation/`の動画と`dist/Fuzitter-Setup-0.1.29.exe`は大容量のため、提出用フォルダまたはアーカイブを作成した後、実ファイルが含まれていることを確認してください。
+- `Presentation/`の動画と`dist/Fuzitter-Setup-0.2.0.exe`は大容量のため、提出用フォルダまたはアーカイブを作成した後、実ファイルが含まれていることを確認してください。
 - 実行環境はWindows 11以降を対象としています。
