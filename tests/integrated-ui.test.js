@@ -37,5 +37,17 @@ test("course folder naming and settings reset use creation-specific UI", () => {
   assert.match(rendererSource, /dialogTitle: "コースフォルダを新規作成"/);
   assert.match(rendererSource, /mode === "create" \? "新規作成する" : "変更する"/);
   assert.match(preloadSource, /resetAppSettings: \(\) => ipcRenderer\.invoke\("app:settings:reset"\)/);
+  assert.match(preloadSource, /restartApp: \(\) => ipcRenderer\.invoke\("app:restart"\)/);
   assert.match(mainSource, /ipcMain\.handle\("app:settings:reset"/);
+  assert.match(mainSource, /ipcMain\.handle\("app:restart"[\s\S]*?app\.relaunch\(\)[\s\S]*?app\.exit\(0\)/);
+  assert.match(rendererSource, /await window\.fuzzyApi\.restartApp\(\)/);
+  const onboardingHandlerStart = rendererSource.indexOf(
+    'elements.onboardingCompleteButton?.addEventListener("click"',
+  );
+  const onboardingCompleteHandler = rendererSource.slice(
+    onboardingHandlerStart,
+    rendererSource.indexOf("elements.resetSiteDataButton", onboardingHandlerStart),
+  );
+  assert.notEqual(onboardingHandlerStart, -1);
+  assert.doesNotMatch(onboardingCompleteHandler, /openTutorialPdf\(\)/);
 });

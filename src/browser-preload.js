@@ -1,6 +1,6 @@
 const { ipcRenderer } = require("electron");
 const selectors = require("./course-selectors.json");
-const { isSubmissionPageUrl } = require("./timeline-matching");
+const { isCourseSectionPageUrl, isSubmissionPageUrl } = require("./timeline-matching");
 
 function debounce(callback, wait) {
   let timeoutId = null;
@@ -169,10 +169,13 @@ function buildCourseUrl(courseId) {
   try {
     const parsed = new URL(location.href);
     const markerIndex = parsed.pathname.toLowerCase().lastIndexOf("/mod/");
-    if (markerIndex < 0) {
+    if (markerIndex >= 0) {
+      parsed.pathname = `${parsed.pathname.slice(0, markerIndex)}/course/view.php`;
+    } else if (isCourseSectionPageUrl(parsed.toString())) {
+      parsed.pathname = parsed.pathname.replace(/\/course\/section\.php$/i, "/course/view.php");
+    } else {
       return "";
     }
-    parsed.pathname = `${parsed.pathname.slice(0, markerIndex)}/course/view.php`;
     parsed.search = `?id=${encodeURIComponent(courseId)}`;
     parsed.hash = "";
     return parsed.toString();
@@ -211,6 +214,9 @@ function getMoodlePageKind(targetUrl) {
     const pathname = parsed.pathname.toLowerCase();
     if (pathname.endsWith("/course/view.php") && parsed.searchParams.get("id")) {
       return "course";
+    }
+    if (isCourseSectionPageUrl(targetUrl)) {
+      return "section";
     }
     if (isSubmissionPageUrl(targetUrl)) {
       return "submission";

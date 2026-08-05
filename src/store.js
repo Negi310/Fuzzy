@@ -196,7 +196,7 @@ class Store {
     this.state.rootDir = String(rootDir || "");
     this.state.mappings = [];
     this.state.preferences = createDefaultPreferences({
-      onboardingCompleted: Boolean(currentPreferences.onboardingCompleted),
+      onboardingCompleted: false,
       startupAutoLaunchRegistered: Boolean(currentPreferences.startupAutoLaunchRegistered),
     });
     this.save();

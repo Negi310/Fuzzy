@@ -9,6 +9,7 @@ const {
   findCourseMapping,
   findTimelineSubmissionEntry,
   isCoursePageUrl,
+  isCourseSectionPageUrl,
   isSubmissionPageUrl,
   mergeCourseContext,
   resolveTimelineSubmissionTarget,
@@ -26,6 +27,30 @@ test("recognizes only course URLs with a course id", () => {
   assert.equal(isCoursePageUrl("https://moodle.example/2026/course/view.php?id=404"), true);
   assert.equal(isCoursePageUrl("https://moodle.example/2026/course/view.php"), false);
   assert.equal(isCoursePageUrl("https://moodle.example/2026/mod/assign/view.php?id=404"), false);
+});
+
+test("recognizes Moodle course section pages separately from course and submission pages", () => {
+  assert.equal(isCourseSectionPageUrl("https://moodle.example/2026/course/section.php?id=88"), true);
+  assert.equal(isCourseSectionPageUrl("https://moodle.example/2026/course/section.php"), false);
+  assert.equal(isCourseSectionPageUrl("https://moodle.example/2026/course/view.php?id=404"), false);
+  assert.equal(isSubmissionPageUrl("https://moodle.example/2026/course/section.php?id=88"), false);
+});
+
+test("section navigation preserves the mapped course context", () => {
+  const previous = {
+    courseName: "人工知能",
+    courseId: "404",
+    courseUrl: "https://moodle.example/2026/course/view.php?id=404",
+  };
+  const merged = mergeCourseContext(previous, {
+    url: "https://moodle.example/2026/course/section.php?id=88",
+    pageKind: "section",
+  });
+
+  assert.equal(merged.pageKind, "section");
+  assert.equal(merged.courseId, "404");
+  assert.equal(merged.courseName, "人工知能");
+  assert.equal(merged.courseUrl, "https://moodle.example/2026/course/view.php?id=404");
 });
 
 test("submission navigation preserves course context and ignores the assignment id", () => {

@@ -114,7 +114,7 @@ test("store initializes startup auto launch preference when missing", () => {
   }
 });
 
-test("resetSettings restores configurable settings without deleting history", () => {
+test("resetSettings restores configurable settings and requires onboarding again", () => {
   const { store, cleanup } = createTempStore({
     rootDir: "D:\\Custom\\Fuzitter",
     mappings: [
@@ -141,7 +141,7 @@ test("resetSettings restores configurable settings without deleting history", ()
     assert.equal(state.preferences.dashboardAutoload, false);
     assert.deepEqual(state.preferences.keyBindings, {});
     assert.equal(state.preferences.moodleHome, undefined);
-    assert.equal(state.preferences.onboardingCompleted, true);
+    assert.equal(state.preferences.onboardingCompleted, false);
     assert.equal(state.preferences.startupAutoLaunchRegistered, true);
   } finally {
     cleanup();

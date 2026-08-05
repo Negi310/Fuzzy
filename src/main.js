@@ -511,10 +511,15 @@ async function resetSiteData(siteKey) {
   siteDataResetInFlight = true;
   try {
     const result = await clearSiteData(fuzzySession, target);
+    const onboardingRequired = target.key === "moodle";
+    if (onboardingRequired) {
+      store.setPreference("onboardingCompleted", false);
+    }
     return {
       siteKey: target.key,
       label: target.label,
       reloadHosts: target.cookieHosts,
+      onboardingRequired,
       ...result,
     };
   } finally {
@@ -3002,6 +3007,14 @@ ipcMain.handle("app:settings:reset", async () => {
     defaults: buildAppDefaults(),
     state: await buildInitialState(),
   };
+});
+
+ipcMain.handle("app:restart", () => {
+  setTimeout(() => {
+    app.relaunch();
+    app.exit(0);
+  }, 50);
+  return { ok: true };
 });
 
 ipcMain.handle("app:focus-window", () => focusMainWindow());
